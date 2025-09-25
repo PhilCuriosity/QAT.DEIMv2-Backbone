@@ -21,7 +21,7 @@
     <a href="https://github.com/Intellindust-AI-Lab/DEIMv2">
         <img alt="stars" src="https://img.shields.io/github/stars/Intellindust-AI-Lab/DEIMv2">
     </a>
-    <a href="mailto:shihuahuang95@gmail.com">
+    <a href="mailto:shenxi@intellindust.com">
         <img alt="Contact Us" src="https://img.shields.io/badge/Contact-Email-yellow">
     </a>
 </p>
@@ -34,18 +34,18 @@
 
 
 <div align="center">
-  <a href="http://www.shihuahuang.cn">Shihua Huang</a><sup>1*</sup>,
-  Yongjie Hou<sup>1,2*</sup>,
-  Longfei Liu<sup>1*</sup>,
-  <a href="https://xuanlong-yu.github.io/">Xuanlong Yu<sup>1</sup>,
-  <a href="https://xishen0220.github.io">Xi Shen</a><sup>1†</sup>
+  <a href="http://www.shihuahuang.cn">Shihua Huang</a><sup>1*</sup>,&nbsp;&nbsp;
+  Yongjie Hou<sup>1,2*</sup>,&nbsp;&nbsp;
+  Longfei Liu<sup>1*</sup>,&nbsp;&nbsp;
+  <a href="https://xuanlong-yu.github.io/">Xuanlong Yu</a><sup>1</sup>,&nbsp;&nbsp;
+  <a href="https://xishen0220.github.io">Xi Shen</a><sup>1†</sup>&nbsp;&nbsp;
 </div>
 
   
 <p align="center">
 <i>
-1. Intellindust AI Lab &nbsp; 2. Xiamen University &nbsp; <br> 
-* Equal Contribution &nbsp; † Corresponding Author
+1. <a href="https://intellindust-ai-lab.github.io"> Intellindust AI Lab</a> &nbsp;&nbsp; 2. Xiamen University &nbsp; <br> 
+* Equal Contribution &nbsp;&nbsp; † Corresponding Author
 </i>
 </p>
 
@@ -442,12 +442,13 @@ If you use `DEIMv2` or its methods in your work, please cite the following BibTe
 <summary> bibtex </summary>
 
 ```latex
-@misc{huang2024deim,
-      title={DEIM: DETR with Improved Matching for Fast Convergence},
-      author={Shihua Huang, Zhichao Lu, Xiaodong Cun, Yongjun Yu, Xiao Zhou, and Xi Shen},
-      booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
-      year={2025},
+@article{huang2025deimv2,
+  title={Real-Time Object Detection Meets DINOv3},
+  author={Huang, Shihua and Hou, Yongjie and Liu, Longfei and Yu, Xuanlong and Shen, Xi},
+  journal={arXiv},
+  year={2025}
 }
+  
 ```
 </details>
 
