@@ -6,8 +6,8 @@
     <a href="https://github.com/Intellindust-AI-Lab/DEIMv2/blob/master/LICENSE">
         <img alt="license" src="https://img.shields.io/badge/LICENSE-Apache%202.0-blue">
     </a>
-    <a href="https://arxiv.org/abs/2412.04234">
-        <img alt="arXiv" src="https://img.shields.io/badge/arXiv-2412.04234-red">
+    <a href="https://arxiv.org/abs/2509.20787">
+        <img alt="arXiv" src="https://img.shields.io/badge/arXiv-2509.20787-red">
     </a>
    <a href="https://intellindust-ai-lab.github.io/projects/DEIMv2/">
         <img alt="project webpage" src="https://img.shields.io/badge/Webpage-DEIMv2-purple">
