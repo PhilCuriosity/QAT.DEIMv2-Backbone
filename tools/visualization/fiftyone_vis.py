@@ -1,8 +1,4 @@
 """
-DEIMv2: Real-Time Object Detection Meets DINOv3
-Copyright (c) 2025 The DEIMv2 Authors. All Rights Reserved.
----------------------------------------------------------------------------------
-Modified from RT-DETR (https://github.com/Peterande/D-FINE)
 Copyright (c) 2024 The D-FINE Authors. All Rights Reserved.
 """
 
@@ -68,16 +64,15 @@ label_map = {
 }
 
 class CustomModel(fom.Model):
-    def __init__(self, cfg, img_size):
+    def __init__(self, cfg):
         super().__init__()
         self.model = cfg.model.eval().cuda()
         self.postprocessor = cfg.postprocessor.eval().cuda()
         self.transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Resize(img_size),  # Resize to the size expected by your model
+            transforms.Resize((640, 640)),  # Resize to the size expected by your model
             # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-        self.size = img_size[0]
 
     @property
     def media_type(self):
@@ -115,10 +110,10 @@ class CustomModel(fom.Model):
             detection = fol.Detection(
                 label=label_map[label.item()],
                 bounding_box=[
-                    bbox[0] / self.size,  # Normalized coordinates
-                    bbox[1] / self.size,
-                    (bbox[2] - bbox[0]) / self.size,
-                    (bbox[3] - bbox[1]) / self.size
+                    bbox[0] / 640,  # Normalized coordinates
+                    bbox[1] / 640,
+                    (bbox[2] - bbox[0]) / 640,
+                    (bbox[3] - bbox[1]) / 640
                 ],
                 confidence=score
             )
@@ -130,7 +125,7 @@ class CustomModel(fom.Model):
         image = Image.fromarray(image).convert('RGB')
         image_tensor = self.transform(image).unsqueeze(0).cuda()
         outputs = self.model(image_tensor)
-        orig_target_sizes = torch.tensor([[self.size, self.size]]).cuda()
+        orig_target_sizes = torch.tensor([[640, 640]]).cuda()
         predictions = self.postprocessor(outputs, orig_target_sizes)
         return self._convert_predictions(predictions)
 
@@ -142,7 +137,7 @@ class CustomModel(fom.Model):
             image_tensors.append(image_tensor)
         image_tensors = torch.stack(image_tensors).cuda()
         outputs = self.model(image_tensors)
-        orig_target_sizes = torch.tensor([[self.size, self.size] for image in images]).cuda()
+        orig_target_sizes = torch.tensor([[640, 640] for image in images]).cuda()
         predictions = self.postprocessor(outputs, orig_target_sizes)
         converted_predictions = [self._convert_predictions(pred) for pred in predictions]
 
@@ -252,9 +247,8 @@ def main(args):
             # NOTE load train mode state -> convert to deploy mode
             cfg.model.load_state_dict(state)
             predictions_view = dataset.take(500, seed=51)
-            img_size = cfg.yaml_cfg["eval_spatial_size"]
 
-            model = CustomModel(cfg, img_size)
+            model = CustomModel(cfg)
             L = model.model.decoder.decoder.eval_idx
             # Apply models and save predictions in different label fields
             for i in [L]:
