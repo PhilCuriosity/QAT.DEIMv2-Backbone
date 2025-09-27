@@ -1,26 +1,31 @@
 """
+DEIMv2: Real-Time Object Detection Meets DINOv3
+Copyright (c) 2025 The DEIMv2 Authors. All Rights Reserved.
+---------------------------------------------------------------------------------
+Modified from RT-DETR (https://github.com/Peterande/D-FINE)
 Copyright (c) 2024 The D-FINE Authors. All Rights Reserved.
 """
 
+import argparse
 import os
 import subprocess
-
-import argparse
-
-import torch
-import fiftyone.core.models as fom
-import fiftyone as fo
-import fiftyone.zoo as foz
-import torchvision.transforms as transforms
-from PIL import Image
-import fiftyone.core.labels as fol
-import fiftyone.core.fields as fof
-from fiftyone import ViewField as F
-import time
-import tqdm
 import sys
+import time
+
+import fiftyone as fo
+import fiftyone.core.fields as fof
+import fiftyone.core.labels as fol
+import fiftyone.core.models as fom
+import fiftyone.zoo as foz
+import torch
+import torchvision.transforms as transforms
+import tqdm
+from fiftyone import ViewField as F
+from PIL import Image
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../..'))
 from engine.core import YAMLConfig
+
 
 def kill_existing_mongod():
     try:
@@ -63,15 +68,16 @@ label_map = {
 }
 
 class CustomModel(fom.Model):
-    def __init__(self, cfg):
+    def __init__(self, cfg, img_size):
         super().__init__()
         self.model = cfg.model.eval().cuda()
         self.postprocessor = cfg.postprocessor.eval().cuda()
         self.transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Resize((640, 640)),  # Resize to the size expected by your model
+            transforms.Resize(img_size),  # Resize to the size expected by your model
             # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+        self.size = img_size[0]
 
     @property
     def media_type(self):
@@ -109,10 +115,10 @@ class CustomModel(fom.Model):
             detection = fol.Detection(
                 label=label_map[label.item()],
                 bounding_box=[
-                    bbox[0] / 640,  # Normalized coordinates
-                    bbox[1] / 640,
-                    (bbox[2] - bbox[0]) / 640,
-                    (bbox[3] - bbox[1]) / 640
+                    bbox[0] / self.size,  # Normalized coordinates
+                    bbox[1] / self.size,
+                    (bbox[2] - bbox[0]) / self.size,
+                    (bbox[3] - bbox[1]) / self.size
                 ],
                 confidence=score
             )
@@ -124,7 +130,7 @@ class CustomModel(fom.Model):
         image = Image.fromarray(image).convert('RGB')
         image_tensor = self.transform(image).unsqueeze(0).cuda()
         outputs = self.model(image_tensor)
-        orig_target_sizes = torch.tensor([[640, 640]]).cuda()
+        orig_target_sizes = torch.tensor([[self.size, self.size]]).cuda()
         predictions = self.postprocessor(outputs, orig_target_sizes)
         return self._convert_predictions(predictions)
 
@@ -136,7 +142,7 @@ class CustomModel(fom.Model):
             image_tensors.append(image_tensor)
         image_tensors = torch.stack(image_tensors).cuda()
         outputs = self.model(image_tensors)
-        orig_target_sizes = torch.tensor([[640, 640] for image in images]).cuda()
+        orig_target_sizes = torch.tensor([[self.size, self.size] for image in images]).cuda()
         predictions = self.postprocessor(outputs, orig_target_sizes)
         converted_predictions = [self._convert_predictions(pred) for pred in predictions]
 
@@ -246,8 +252,9 @@ def main(args):
             # NOTE load train mode state -> convert to deploy mode
             cfg.model.load_state_dict(state)
             predictions_view = dataset.take(500, seed=51)
+            img_size = cfg.yaml_cfg["eval_spatial_size"]
 
-            model = CustomModel(cfg)
+            model = CustomModel(cfg, img_size)
             L = model.model.decoder.decoder.eval_idx
             # Apply models and save predictions in different label fields
             for i in [L]:
