@@ -10,7 +10,7 @@ This software may be used and distributed in accordance with
 the terms of the DINOv3 License Agreement.
 """
 
-import math
+import os
 
 import torch
 import torch.nn as nn
@@ -87,14 +87,14 @@ class DINOv3STAs(nn.Module):
         super(DINOv3STAs, self).__init__()
         if 'dinov3' in name:
             self.dinov3 = DinoVisionTransformer(name=name)
-            if weights_path is not None:
+            if weights_path is not None and os.path.exists(weights_path):
                 print(f'Loading ckpt from {weights_path}...')
                 self.dinov3.load_state_dict(torch.load(weights_path))
             else:
                 print('Training DINOv3 from scratch...')
         else:
             self.dinov3 =  VisionTransformer(embed_dim=embed_dim, num_heads=num_heads, return_layers=interaction_indexes)
-            if weights_path is not None:
+            if weights_path is not None and os.path.exists(weights_path):
                 print(f'Loading ckpt from {weights_path}...')
                 self.dinov3._model.load_state_dict(torch.load(weights_path))
             else:
