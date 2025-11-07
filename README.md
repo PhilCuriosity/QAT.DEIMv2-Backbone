@@ -65,7 +65,7 @@
  
   
 ## 🚀 Updates
-- [x] **\[2025.11.3\]** We have uploaded our models to Hugging Face.
+- [x] **\[2025.11.3\]** [We have uploaded our models to Hugging Face](https://huggingface.co/Intellindust)! Thanks to NielsRogge!
 - [x] **\[2025.10.28\]** Optimized the attention module in ViT-Tiny, reducing memory usage by half for the S and M models.
 - [x] **\[2025.10.2\]** [DEIMv2 has been integrated into X-AnyLabeling!](https://github.com/Intellindust-AI-Lab/DEIMv2/issues/25#issue-3473960491) Many thanks to the X-AnyLabeling maintainers for making this possible.
 - [x] **\[2025.9.26\]** Release DEIMv2 series.
