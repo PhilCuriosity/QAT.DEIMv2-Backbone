@@ -70,8 +70,6 @@ In particular, DEIMv2 may use materials from projects such as D-FINE, DEIM, DINO
 
 Nothing in this License is intended to modify, restrict, or revoke rights granted by a third-party license.
 
-A list of applicable Third-Party Materials and their licenses is provided in `THIRD_PARTY_LICENSES/` or the project documentation.
-
 ## 7. Intellectual Property
 
 INTELLINDUST INFORMATION TECHNOLOGY (SHENZHEN) CO., LTD. retains all right, title, and interest in the DEIMv2 Materials owned by INTELLINDUST INFORMATION TECHNOLOGY (SHENZHEN) CO., LTD.
