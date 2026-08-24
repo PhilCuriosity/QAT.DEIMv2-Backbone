@@ -7,8 +7,8 @@
 </h3>
 
 <p align="center">
-    <a href="https://github.com/Intellindust-AI-Lab/DEIMv2/blob/master/LICENSE">
-        <img alt="license" src="https://img.shields.io/badge/LICENSE-Apache%202.0-blue">
+    <a href="https://github.com/Intellindust-AI-Lab/DEIMv2/blob/master/LICENSE.md">
+        <img alt="license" src="https://img.shields.io/badge/LICENSE-DEIMv2%20License-blue">
     </a>
     <a href="https://arxiv.org/abs/2509.20787">
         <img alt="arXiv" src="https://img.shields.io/badge/arXiv-2509.20787-red">
@@ -576,11 +576,17 @@ If you use `DEIMv2` or its methods in your work, please cite the following BibTe
 }
 ```
 
-## 6. Acknowledgement
+## 6. License
+
+This project is released under the DEIMv2 License. See the [LICENSE](./LICENSE) file for details.
+
+For commercial licensing inquiries, please [Contact Us](https://www.intellindust.cn/#contact) or email shenxi@intellindust.com.
+
+## 7. Acknowledgement
 Our work is built upon [LightlyTrain](https://github.com/lightly-ai/lightly-train), [D-FINE](https://github.com/Peterande/D-FINE), [RT-DETR](https://github.com/lyuwenyu/RT-DETR), [DEIM](https://github.com/ShihuaHuang95/DEIM), and [DINOv3](https://github.com/facebookresearch/dinov3). Thanks for their great work!
 
 ✨ Feel free to contribute and reach out if you have any questions! ✨
 
-## 7. Star History
+## 8. Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Intellindust-AI-Lab/DEIMv2&type=Date)](https://www.star-history.com/#Intellindust-AI-Lab/DEIMv2&Date)
