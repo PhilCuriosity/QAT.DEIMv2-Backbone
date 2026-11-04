@@ -1,6 +1,8 @@
 # Ignored Files
 outputs/
 ckpts/
+weights/
+runs/
 testenv/
 backup
 

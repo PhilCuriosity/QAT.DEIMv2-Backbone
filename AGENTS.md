@@ -178,7 +178,12 @@ README 公布的 COCO val2017 `AP`（mAP50-95）：
 
 ## 当前状态（2026-11-04）
 
-- 仓库已回退到上游干净状态；`git status` 仅保留本 `AGENTS.md`。
-- 没有 `qat/` 代码、`weights/`、checkpoint 或 ONNX 产物。
+- 已按计划重新建立文档、工具和部分权重：
+  - `docs/`：architecture / baseline / qat-pipeline / qat-experiment-plan / qat-experiment-log
+  - `utils/export_fp32_onnx.py`：浮点全模型与 backbone+encoder ONNX 导出
+  - `weights/`：DINOv3-S 权重与 HF safetensors（被 gitignore）
+- `qat/` 代码尚未重建；N/Pico 权重未放入本仓库。
 - 已确认 N / Pico / S 的 FP32 基线；其余型号待复测。
-- 下一步：重新建立 QAT 代码与权重，先完成 Pico/N 的 W16A16，再扩展到 Atto/Femto/S/M/L/X。
+- **首要实验改为 W8A16**：先做 backbone+encoder QAT + FP32 decoder，计划见
+  `docs/qat-experiment-plan.md`，记录见 `docs/qat-experiment-log.md`。
+- 下一步：搭建 QAT 基础设施，完成 N 的 W8A16 backbone+encoder PTQ/QAT，再扩展到 Pico / S。
