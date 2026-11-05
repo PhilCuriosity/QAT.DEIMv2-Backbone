@@ -32,6 +32,7 @@ from .ax_quantizer_utils import (
     OperatorConfig,
     OperatorPatternType,
     propagate_annotation,
+    _share_dyadic_inputs,
     QuantizationConfig,
     annotate_bias,
 )
@@ -470,6 +471,11 @@ class AXQuantizer(Quantizer):
                 if module_type not in self.OPS:
                     continue
                 OP_TO_ANNOTATOR[module_type](model, module_config, module_names, is_global=False)
+
+        # Regional configs replace input qspecs with fresh instances, undoing
+        # the sharing done inside propagate_annotation; re-share so chained
+        # producers/consumers keep one quantization domain.
+        _share_dyadic_inputs(model)
 
         if self._annotate_bias:
             annotate_bias(model)

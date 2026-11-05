@@ -1762,6 +1762,91 @@ def _is_share_obs_or_fq_op(op: Callable) -> bool:
     ]
 
 
+def _shared_qspec_dtype(qspec, _seen: Optional[set] = None):
+    """Best-effort dtype lookup for a (possibly shared) quantization spec."""
+    if qspec is None:
+        return None
+    dtype = getattr(qspec, "dtype", None)
+    if dtype is not None:
+        return dtype
+    edge_or_node = getattr(qspec, "edge_or_node", None)
+    seen = set() if _seen is None else _seen
+    if isinstance(edge_or_node, tuple) and len(edge_or_node) == 2:
+        source, output_node = edge_or_node
+        if not isinstance(output_node, Node) or id(output_node) in seen:
+            return None
+        seen.add(id(output_node))
+        annotation = output_node.meta.get("quantization_annotation")
+        if annotation is None:
+            return None
+        inner = (annotation.input_qspec_map or {}).get(source)
+        if inner is not None:
+            return _shared_qspec_dtype(inner, seen)
+        return _shared_qspec_dtype(annotation.output_qspec, seen)
+    if isinstance(edge_or_node, Node):
+        if id(edge_or_node) in seen:
+            return None
+        seen.add(id(edge_or_node))
+        annotation = edge_or_node.meta.get("quantization_annotation")
+        if annotation is None:
+            return None
+        return _shared_qspec_dtype(annotation.output_qspec, seen)
+    return None
+
+
+def _share_dyadic_input_qspec(input_node, current_qspec):
+    """Reuse the producer's output qspec for a consumer input when compatible.
+
+    Elementwise annotators create a fresh ``QuantizationSpec`` per input, so a
+    chained ``Mul/Add/Sub/Div`` boundary otherwise carries two independent
+    observers (and PT2E inserts a Q->DQ requant between them).  When the
+    producer has a compatible float output qspec, share it instead.
+    """
+    if current_qspec is None or not isinstance(input_node, Node):
+        return current_qspec
+    if getattr(input_node, "op", None) == "get_attr":
+        return current_qspec
+    annotation = input_node.meta.get("quantization_annotation")
+    producer_qspec = annotation.output_qspec if annotation else None
+    if producer_qspec is None:
+        return current_qspec
+    if isinstance(producer_qspec, SharedQuantizationSpec):
+        return SharedQuantizationSpec(input_node)
+    producer_dtype = _shared_qspec_dtype(producer_qspec)
+    current_dtype = getattr(current_qspec, "dtype", None)
+    if producer_dtype is None or current_dtype is None or producer_dtype != current_dtype:
+        return current_qspec
+    producer_qscheme = getattr(producer_qspec, "qscheme", None)
+    current_qscheme = getattr(current_qspec, "qscheme", None)
+    if (
+        producer_qscheme is not None
+        and current_qscheme is not None
+        and producer_qscheme != current_qscheme
+    ):
+        return current_qspec
+    return SharedQuantizationSpec(input_node)
+
+
+def _share_dyadic_inputs(model: torch.fx.GraphModule) -> None:
+    """Share every annotated consumer input with its producer when compatible.
+
+    ``_do_annotate_dyadic`` already attempts this while annotating, but the
+    annotation order is graph order; this post-pass catches forward references
+    (or producers annotated later in the OPS loop) without changing anything
+    that is already shared.
+    """
+    for node in model.graph.nodes:
+        annotation = node.meta.get("quantization_annotation")
+        if annotation is None or not annotation.input_qspec_map:
+            continue
+        for input_node, qspec in list(annotation.input_qspec_map.items()):
+            if isinstance(qspec, SharedQuantizationSpec):
+                continue
+            annotation.input_qspec_map[input_node] = _share_dyadic_input_qspec(
+                input_node, qspec
+            )
+
+
 def propagate_annotation(model: torch.fx.GraphModule, quantization_config: Optional[QuantizationConfig]) -> None:
     for n in model.graph.nodes:
         if n.op != "call_function" or not _is_share_obs_or_fq_op(n.target):
@@ -1802,6 +1887,8 @@ def propagate_annotation(model: torch.fx.GraphModule, quantization_config: Optio
             output_qspec=shared_qspec,
             _annotated=True,
         )
+
+    _share_dyadic_inputs(model)
 
 
 # TODO: make the list of ops customizable
