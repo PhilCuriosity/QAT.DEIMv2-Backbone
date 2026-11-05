@@ -1,0 +1,11 @@
+{
+  "name": "deimv2_dinov3_s_backbone_encoder_w8a8",
+  "model_config": "configs/deimv2/deimv2_dinov3_s_coco.yml",
+  "weights": "weights/deimv2_dinov3_s_coco.pth",
+  "quant_config": "qat/configs/quant/w8a8.json",
+  "regional_report": null,
+  "dataset_root": "~/dataset/coco",
+  "input_size": [640, 640],
+  "batch_size": 32,
+  "num_workers": 8
+}

@@ -1,0 +1,19 @@
+{
+  "global_config": {
+    "is_symmetric": false,
+    "act_observer": "moving_avg",
+    "weight_observer": "moving_avg_per_channel",
+    "input": {
+      "dtype": "U8",
+      "qmin": 0,
+      "qmax": 255
+    },
+    "weight": {
+      "dtype": "S8",
+      "qmin": -127,
+      "qmax": 127
+    },
+    "share_qparam": true
+  },
+  "regional_configs": []
+}
