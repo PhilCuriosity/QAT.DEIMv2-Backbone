@@ -162,7 +162,7 @@ HuggingFace `config.json` 的 `[5, 8, 11]` 会掉到 47.0（见 `baseline.md`）
      否则回退到原来的 `arange → meshgrid → angles → sin/cos` 路径。
    - `VisionTransformer.precompute_rope(image_size)`、
      `DINOv3STAs.precompute_rope(image_size)` 提供入口；
-     `qat/export.py::export_backbone_encoder` 和 `utils/export_fp32_onnx.py`
+     `qat/export.py::export_backbone_encoder` 和 `qat/export_fp32_onnx.py`
      在导出前调用。
    - 效果：
      - 导出图不再包含 `arange/meshgrid/.../Sin/Cos`，表变成常量
@@ -477,4 +477,61 @@ TopK 的 indices 是整数，不参与 fake-quant；values 的量化策略见
 | PostProcessor | `engine/deim/postprocessor.py` |
 | Matcher | `engine/deim/matcher.py` |
 | Criterion | `engine/deim/deim_criterion.py` |
-| ONNX 导出 | `tools/deployment/export_onnx.py` |
+| ONNX 导出（上游） | `tools/deployment/export_onnx.py` |
+| QAT 边界（backbone+encoder / frozen decoder） | `qat/boundaries.py` |
+| PT2E prepare / convert | `qat/pt2e.py` |
+| regional 量化区域自动发现 | `qat/regional.py` |
+| QAT 训练入口 | `qat/train_backbone_encoder.py` |
+| QAT 图导出 | `qat/export.py` |
+| QuantONNX 导出（含 QDQ 合并） | `qat/export_quantonnx.py` |
+| FP32 ONNX 导出 | `qat/export_fp32_onnx.py` |
+| AXERA PT2E quantizer（vendored） | `utils/ax_quantizer.py`, `utils/ax_quantizer_utils.py`, `utils/ax_quantizer_lsq.py` |
+
+## 11. QAT 工具链与导出改动（2026-11-05）
+
+本轮为路线 B（backbone + encoder QAT、decoder 冻结 FP32）落地的改动。每一项都列出
+所在文件和它解决的问题。
+
+### 11.1 模型侧（导出/量化相关）
+
+| 改动 | 文件 | 解决的问题 |
+|---|---|---|
+| `RopePositionEmbedding.precompute(H, W)`，sin/cos 写入非持久 buffer | `engine/backbone/vit_tiny.py` | 原实现每次前向现算 `arange → meshgrid → angles → Sin/Cos`，ONNX 里保留 1 个 `Sin`、1 个 `Cos` 和整条角度计算链，中间每一步都被插 Q/DQ，量化误差直接进入 RoPE 表；部分 NPU 也不支持三角函数。折叠后表变成常量（640 输入 → 2 个 `[1,1,1600,64]` uint8 + 2 个 DQ），中间链路无 Q/DQ |
+| `rotate_half` 用 `x2 * -1` 替代 `-x2` | `engine/backbone/vit_tiny.py` | 原写法导出 24 个 `Neg`（12 层 × q/k），且输入/输出都被量化。改成 `Mul` 后无 `Neg` 节点，`-1` 是 Python 标量不会生成 Q/DQ，数值完全等价 |
+| `Attention.explicit_attention`（默认 False，导出时置 True） | `engine/backbone/vit_tiny.py`、`qat/export.py` | `AXQuantizer.OPS` 没有 `sdpa`，12 层 ViT 的 `QKᵀ → softmax → AV` 整段无法注解，ONNX 里是浮点孤岛。导出时切显式 `q@kᵀ → softmax → @v` 后可插 Q/DQ；eager FP32 仍走 SDPA，实测与原基线 diff = 0 |
+
+### 11.2 QAT 工具链（`qat/`）
+
+| 改动 | 文件 | 解决的问题 |
+|---|---|---|
+| 路线 B 边界：`BackboneEncoderQAT` + `FrozenDecoder` | `qat/boundaries.py` | 只在 backbone+encoder 上 QAT，decoder 保持 FP32；避开 deformable attention、FDR/Integral、decoder TopK 的量化敏感点 |
+| PT2E prepare/convert 封装与清理（`_remove_empty_annotations`、`_repair_dangling_shared_qspecs`、`_rank_one_guards`） | `qat/pt2e.py` | DINOv3-S 的 concat/共享 qspec 图在 `prepare_qat_pt2e` 报 `cat_1` 缺 observer、`KeyError: conv2d`；清理悬空共享引用后 S 可正常 prepare |
+| `share_qparam`（concat 输入/输出共享 qparams） | `qat/configs/quant/w8a8.json` | 早期 `share_qparam=true` 在 S 的 concat 图报 `cat_1` 缺 observer；`_repair_dangling_shared_qspecs` 加入后可正常 prepare。当前 W8A8 使用 `true`，只影响 concat（S smoke 中 53/56 个 concat 共享同一组 qparams） |
+| 自动 regional discovery + 删除 softmax FP32 覆盖 | `qat/regional.py` | 硬编码节点名换模型即失效；原 softmax FP32 策略只生效一半（输入浮点、输出仍 U8），现改为走全局 U8，softmax 输入/输出都有 Q/DQ |
+| `--eval-every` / `--eval-interval` + `eval_history.jsonl` | `qat/train_backbone_encoder.py` | 50 epoch 训练过程中看不到精度变化；现在每个 epoch 可做全量 val2017 并逐行记录 |
+| `--train-max-batches` / `--eval-max-batches` | `qat/train_backbone_encoder.py` | 冒烟测试跑完整 train2017（118k）和 val2017（5k）太慢；可限制 batch 数做子集验证 |
+| 运行元数据（`train_args.json`、`command.txt`、`config_snapshot/`、`environment.json`） | `qat/train_backbone_encoder.py` | 实验不可复现；现在命令、参数、配置快照、环境与 git commit 都随 run 保存 |
+| `_share_dyadic_inputs` / `_share_dyadic_input_qspec` / `_shared_qspec_dtype` | `utils/ax_quantizer_utils.py`；在 `utils/ax_quantizer.py`、`utils/ax_quantizer_lsq.py` 的 regional 之后再次调用 | 相邻被注解算子各自建 observer，converted 图里出现 44 处 `Q→DQ→Q→DQ`。把 consumer 输入改成 `SharedQuantizationSpec(producer)` 后，converted 图连续对从 44 降到 0；regional 配置会覆盖 qspec，所以之后要再共享一次 |
+| `_annotate_cat` 同时匹配 `torch.cat` / `torch.concat` | `utils/ax_quantizer_utils.py` | `_get_encoder_input` 用的是 `torch.concat`（`aten.concat.default`），原 annotator 只匹配 `torch.cat` / `aten.cat.default`，导致输出 `memory` 前的最后一个 concat 完全没有注解、没有 Q/DQ。现在两种算子都会注解，`memory` 前是 `Concat → Q → DQ` |
+| `_annotate_matmul` 增加 `aten.bmm.default` | `utils/ax_quantizer_utils.py` | AIFI 的 `nn.MultiheadAttention` 在 FX 里是 `aten.bmm`，原 annotator 只处理 `aten.matmul`，所以 AIFI 的 QKᵀ/AV 没有 output qspec，ONNX 里 AIFI 的 AV MatMul 后没有 Q/DQ。加上后链路为 `MatMul → Q → DQ → Transpose → Q → DQ → Reshape → Q → DQ → Gemm`，三对 Q/DQ 全部保留，无需导出阶段补回 |
+
+### 11.3 导出代码
+
+| 改动 | 文件 | 解决的问题 |
+|---|---|---|
+| 导出前调用 `precompute_rope` | `qat/export.py::export_backbone_encoder`、`qat/export_fp32_onnx.py` | 不预热的话 `torch.export` 仍会抓到现算的 `Sin/Cos`；预热后表是 buffer，导出为常量 |
+| 导出时切显式 attention 并恢复标志 | `qat/export.py::export_backbone_encoder` | 让 PT2E 能注解 attention；导出结束恢复 `explicit_attention=False`，eager 模型不受影响 |
+| `merge_consecutive_qdq`（保留反量化范围较大的一对；支持 `DQ1` 多消费者） | `qat/export_quantonnx.py` | ONNX 导出器会为每个被注解的边物化一对 Q/DQ，即使 qspec 共享也会出现 `Q→DQ→Q→DQ`；`DQ` 有多个消费者时（残差 + Slice）也要能合并。当前 S smoke 导出合并 47 对后连续对为 0，最终 2458 节点 / Q 695 / DQ 819；相同 qparams 下 ORT 输出 diff = 0 |
+| `export_report.json` 增加 `merge_qdq` 统计 | `qat/export_quantonnx.py` | 便于确认合并生效与记录 SHA256、Q/DQ 计数、ORT 对比误差 |
+
+### 11.4 当前验证状态
+
+- FP32 全量 val2017：`0.5086`（基线 `0.509`），RoPE 折叠与显式 attention 均无精度损失
+- S W8A8 smoke（2 step、1 校准 batch）：图结构验证通过；mAP 无参考意义
+- QuantONNX：`Neg/Sin/Cos = 0`，RoPE 表 2 个 uint8 + 2 DQ，连续 QDQ 对 0
+- 输出 `memory` 前：`Concat → Q → DQ`（`torch.concat` 注解生效）
+- AIFI attention：`MatMul → Q → DQ → Transpose → Q → DQ → Reshape → Q → DQ → Gemm`
+  （`aten.bmm` 注解生效，三对 Q/DQ 都保留）
+- `export_report` 的 `passed: false` 是 ORT vs converted PT2E 的执行一致性（mean_abs ~0.08），
+  不是精度结论；FP32 参考导出的 ORT 验证是 passed
+

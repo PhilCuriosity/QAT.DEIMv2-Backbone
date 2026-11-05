@@ -31,14 +31,16 @@
 | HIST-002 | 2026-11-03 | N | 全网络 QAT → ORT | W16A16 | 是 | 42.9824 | 42.4903 | -0.4921 | 历史，产物已回退 |
 | HIST-003 | 2026-11-03 | Pico | 全网络 QAT | W16A16 | 是 | 38.4593 | 38.4756 | +0.0163 | 历史，产物已回退 |
 | HIST-004 | 2026-11-03 | Pico | 全网络 QAT → ORT | W16A16 | 是 | 38.4593 | 38.2732 | -0.1861 | 历史，产物已回退 |
-| EXP-001 | 待定 | N | backbone+encoder PTQ | W8A16 | 否 | 42.9824 | 待测 | - | 计划 |
-| EXP-002 | 待定 | N | backbone+encoder QAT | W8A16 | 是 | 42.9824 | 待测 | - | 计划 |
+| EXP-000 | 2026-11-04 | N | 路线B实现 + 回归测试 | W8A16 | - | - | - | - | 完成 |
+| EXP-001 | 2026-11-04 | N | backbone+encoder PTQ | W8A16 | 否 | 42.9824 | 21.8150 | -21.1674 | 完成，PTQ 误差大 |
+| EXP-002 | 2026-11-04 | N | backbone+encoder QAT（200 step） | W8A16 | 是 | 42.9824 | 31.9316 | -11.0508 | 部分完成，需更多训练 |
 | EXP-003 | 待定 | N | backbone+encoder QAT + memory 蒸馏 | W8A16 | 是 | 42.9824 | 待测 | - | 计划 |
 | EXP-004 | 待定 | N | backbone+encoder 导出/ORT | W8A16 | - | 42.9824 | 待测 | - | 计划 |
-| EXP-005 | 待定 | N | backbone+encoder QAT + LSQ | W8A16+LSQ | 是 | 42.9824 | 待测 | - | 计划 |
+| EXP-005 | 2026-11-05 | N | backbone+encoder LSQ + KD smoke | W8A16+LSQ | 是 | 42.9824 | 待测 | - | 链路 smoke 通过，精度待测 |
 | EXP-006 | 待定 | N | backbone+encoder W16A16 回退对照 | W16A16 | 是 | 42.9824 | 待测 | - | 计划 |
 | EXP-007 | 待定 | Pico | backbone+encoder QAT | W8A16 | 是 | 38.4593 | 待测 | - | 计划 |
 | EXP-008 | 待定 | S | backbone+encoder QAT | W8A16 | 是 | 50.9000 | 待测 | - | 计划 |
+| EXP-009 | 2026-11-05 | S | backbone+encoder W8A8 纯 QAT（50 epoch） | W8A8 | 是 | 50.9000 | 未测 | - | 已启动，epoch 0/50 手动终止，产物保留 |
 
 ## 3. 详细记录
 
@@ -99,25 +101,53 @@
 - QuantONNX ORT：38.2732（Δ -0.1861）
 - 产物：已回退删除
 
+### EXP-000：路线 B 实现 + 模型变更/自动发现回归
+
+- 日期：2026-11-04
+- 形态：backbone+encoder QAT，FP32 decoder 冻结
+- 量化：W8A16
+- 代码：
+  - `qat/boundaries.py`
+  - `qat/pt2e.py`
+  - `qat/regional.py`
+  - `qat/train_backbone_encoder.py`
+  - `qat/tests/test_model_change.py`
+- 测试：
+  - 在 encoder 后插入额外 Conv+BN+SiLU block；
+  - FX export + PT2E prepare 成功；
+  - regional discovery 识别新 block 节点；
+  - 生成的 regional config 可加载；
+  - 完成一次 QAT forward/backward/optimizer step。
+- 结果：`pytest qat/tests/test_model_change.py` 4 passed。
+- 产物：临时 smoke 目录，未作为正式精度实验。
+- 备注：路线 A（全网络 QAT）只记录在文档，不实现。
+
 ### EXP-001：N backbone+encoder W8A16 PTQ
 
-- 状态：计划
-- 目标：只校准 backbone+encoder，不训练，测量纯 PTQ 误差
-- 量化：W8A16（U16 激活 / S8 权重）
+- 日期：2026-11-04
+- 状态：完成
+- 量化：W8A16（U16 激活 / S8 权重），auto regional config
 - 分割：`DEIMTransformer._get_encoder_input` 输出 `memory`
 - decoder：FP32 冻结
+- 校准：val2017，16 batch × 16
 - 评估：全量 val2017
-- 待填：mAP、memory cosine/MAE、TopK 重合率
+- 结果：**mAP50-95 = 21.8150**（Δ -21.1674）
+- 产物：`runs/qat/deimv2_n_w8a16_ptq_20261104_184900`（已删除，指标保留在本文档）
+- 结论：W8A16 纯 PTQ 在 backbone+encoder 上误差很大，不能直接交付。
 
-### EXP-002：N backbone+encoder W8A16 QAT
+### EXP-002：N backbone+encoder W8A16 QAT（200 step）
 
-- 状态：计划
-- 目标：验证 QAT 训练能否恢复 PTQ 误差
-- 量化：W8A16
+- 日期：2026-11-04
+- 状态：部分完成
+- 量化：W8A16 + auto regional config
 - 损失：FP32 decoder + `DEIMCriterion`
 - decoder：冻结 FP32
-- 训练：1–5 epoch，lr 1e-5 ~ 5e-6
-- 待填：训练曲线、mAP、Δ
+- 训练：200 step，batch 16，lr 1e-5
+- 评估：全量 val2017
+- 结果：**mAP50-95 = 31.9316**（Δ -11.0508）
+- 结论：QAT 从 21.8 恢复到 31.9，但距离 FP32 仍差 11.05；200 step 仅约 3200 张图，远未完成 1 epoch，需要更多 step、调 lr、LSQ 或混合精度。
+- 产物：`runs/qat/deimv2_n_w8a16_qat200_lr1e-5_20261104_184700`（已删除，指标保留在本文档）
+- 备注：早期 38.65 的结果是验证时 observer 仍在更新导致的验证集泄漏，已废弃；当前结果在评估前显式冻结 observer。
 
 ### EXP-003：N backbone+encoder W8A16 QAT + memory 蒸馏
 
@@ -128,16 +158,53 @@
 
 ### EXP-004：N backbone+encoder 导出/ORT
 
-- 状态：计划
+- 状态：QAT 图导出完成
 - 目标：导出 `backbone_encoder_qat.onnx` 与 `decoder_fp32.onnx`
-- 验证：PyTorch CPU vs ORT CPU，逐输出直接对比
-- 待填：SHA256、max_abs、mAP
+- 产物：`runs/qat/deimv2_n_w8a16_qat200_lr1e-5_20261104_184700/quantonnx/`（已删除，指标保留在本文档）
+- 验证：PyTorch CPU vs ORT CPU
+  - backbone+encoder `memory`：mean_abs 2.39e-4，max_abs 0.035
+  - decoder（FP32，含 TopK）mean_abs 1.08e-3 / 6.8e-5
+- 简化：`program.optimize()` + `onnxslim.slim`
+  - encoder：900 → 899 节点，Constant 0，functions 0（优化前 692 Constant / 3 functions）
+  - decoder：545 → 548 节点，Constant 0，functions 0
+- 联合推理：`qat/infer_quantonnx.py`，ORT 输出与 converted PT2E 参考匹配
+  （matched logits mean 1.35e-3，boxes mean 2.0e-5），`joint_infer_report.json` passed
+- 备注：QAT 图 233 QuantizeLinear / 376 DequantizeLinear；decoder 原始输出可能因 TopK 查询顺序变化，按 mean 或后处理比较
+- 待填：组合全量 mAP
 
-### EXP-005：N backbone+encoder W8A16 + LSQ
+### EXP-005：N backbone+encoder W8A16 + LSQ + KD smoke
 
-- 状态：计划
-- 目标：8-bit 权重量化误差较大时，对 weight scale 使用 LSQ
-- 待填：LSQ 配置、mAP、Δ、训练稳定性
+- 状态：链路 smoke 通过，精度待测
+- 目标：验证 LSQ prepared 图、KD loss、checkpoint 元数据和 QuantONNX 导出闭环
+- 量化：W8A16 + LSQ
+- 训练：1 step，batch 2，teacher=FP32 N，KD memory/logits/boxes/GIoU
+- 结果：训练正常，loss 有限；checkpoint 含 `use_lsq=true`、`distill=true`；
+  LSQ checkpoint 可导出 QuantONNX，`export_report.json passed=true`
+- 产物：`runs/smoke/deimv2_n_w8a16_lsq_kd_smoke_20261105_094307`（已删除）
+- 待填：正式 step/epoch、全量 mAP、LSQ lr 调参
+- 单元测试：`qat/tests/test_distill.py` 3 passed
+
+### EXP-009：S backbone+encoder W8A8 纯 QAT（50 epoch）
+
+- 状态：**已启动并手动终止**（2026-11-05，用户要求停止；非崩溃/非 OOM）
+- 模型：DEIMv2-S，`configs/deimv2/deimv2_dinov3_s_coco.yml`
+- 权重：`weights/deimv2_dinov3_s_coco.pth`
+- 量化：W8A8（U8/S8）
+- 训练：50 epoch，batch 32，lr 1e-5，不使用 max-steps
+- 校准：32 个 val batch（约 1024 张图）
+- 评估：每个 epoch 全量 val2017，记录 `eval_history.jsonl`
+- 蒸馏：不启用
+- LSQ：不启用
+- tmux session：`deimv2_s_w8a8_20261105_104136`（已 kill）
+- 产物目录：`runs/qat/deimv2_s_w8a8_qat_20261105_104136/`
+  - 含 `launch.sh` / `command.txt` / `train_args.json` / `environment.json` /
+    `config_snapshot/` / `quant_config_discovered.json` / `regional_discovery.json` /
+    `train.log` / `STATUS.md`
+- 终止时进度：epoch 0 未完成，最后 step 300/3696（约 9600 张图），最后 loss 28.16273
+- 未产生 checkpoint（`qat_state.pt` 按 epoch 落盘）和评估结果
+- 精度：未测（无有效 epoch 产物）
+- 恢复方式：`bash runs/qat/deimv2_s_w8a8_qat_20261105_104136/launch.sh`，
+  建议换新的时间戳目录避免覆盖日志
 
 ### EXP-006：N backbone+encoder W16A16 回退对照
 

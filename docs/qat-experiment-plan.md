@@ -292,3 +292,112 @@ QAT 完成后建议导出两个图：
 4. 先做 N，还是 N + Pico 并行。
 5. 是否接受“量化 encoder + FP32 decoder”双图导出。
 6. W8A16 是否需要首轮就启用 LSQ。
+
+## 12. 实现状态（2026-11-04）
+
+路线 B 的代码骨架已落地：
+
+- `qat/boundaries.py`：`BackboneEncoderQAT`、`FrozenDecoder`
+- `qat/pt2e.py`：W8A16 prepare/校准/convert
+- `qat/regional.py`：从 FX 图自动发现 softmax / depthwise / 首尾 conv / attention
+- `qat/train_backbone_encoder.py`：W8A16 QAT 训练 CLI
+- `qat/tests/test_model_change.py`：模型变更 + regional discovery 回归测试
+
+测试结果：
+
+```text
+qat/tests/test_model_change.py ....  [100%]
+4 passed
+```
+
+已覆盖：
+
+- encoder 后插入新的 Conv+BN+SiLU block 后，export/prepare 仍成功；
+- 新节点被 regional discovery 发现并写入配置；
+- 生成的 regional config 可被 `ax_load_config` 加载；
+- 修改结构后仍可完成 QAT forward/backward/optimizer step。
+
+路线 A（全网络 QAT）只在 `qat-pipeline.md` 中保留设计，不实现。
+
+### 初步精度结果
+
+- EXP-001（W8A16 PTQ，16 校准 batch）：mAP50-95 = **21.8150**
+- EXP-002（W8A16 QAT，200 step，lr 1e-5）：mAP50-95 = **31.9316**
+- FP32：42.9824
+
+结论：W8A16 纯 PTQ 误差很大，QAT 有恢复趋势，但 200 step 仍差 11.05；仅约 3200 张图，远未完成 1 epoch。后续优先：
+
+1. 增加 QAT step / epoch；
+2. 调整 lr（backbone vs encoder）；
+3. 尝试 LSQ；
+4. 对敏感层做混合精度（例如 depthwise/首尾 conv 保持 W16A16）；
+5. 再评估 decoder 是否需要解冻。
+
+## 13. LSQ 与蒸馏支持（2026-11-05）
+
+已接入路线 B 训练/导出流程：
+
+- `--lsq`：切换到 `utils/ax_quantizer_lsq.py`
+- checkpoint 写入 `use_lsq`，导出自动识别并重建 LSQ 图
+- `--teacher-weights`：启用 FP32 teacher 蒸馏
+- KD loss：
+  - memory cosine
+  - Hungarian 匹配后的 logits MSE / box L1 / GIoU
+- checkpoint 写入 `distill` 字段
+
+已验证：
+
+- LSQ + KD 1-step smoke 正常
+- LSQ checkpoint → QuantONNX 导出 `passed=true`
+- `qat/tests/test_distill.py` 3 passed
+
+尚未完成：正式 LSQ/KD 全量训练和精度验收。
+
+## 14. 本轮执行计划：W8A8 纯 QAT（不启用 KD/LSQ）
+
+本轮只验证 DEIMv2-S 的单纯 QAT：
+
+- 模型：DEIMv2-S（DINOv3-S）
+- config：`configs/deimv2/deimv2_dinov3_s_coco.yml`
+- 权重：`weights/deimv2_dinov3_s_coco.pth`
+  - SHA256：`fa07a020c8c7474dc20c70a34f2b16a6a6920b9d2d421146dd79a5d9d72fb2da`
+- 范围：backbone + encoder QAT，decoder 冻结 FP32
+- 量化：W8A8（U8 激活 / S8 权重）
+- 训练：50 epoch，batch 32
+- 不启用 LSQ
+- 不启用蒸馏
+
+命令：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m qat.train_backbone_encoder \
+  --config configs/deimv2/deimv2_dinov3_s_coco.yml \
+  --weights weights/deimv2_dinov3_s_coco.pth \
+  --quant-config qat/configs/quant/w8a8.json \
+  --output-dir runs/qat/deimv2_s_w8a8_qat_$(date +%Y%m%d_%H%M%S) \
+  --device cuda:0 --batch-size 32 --workers 8 \
+  --epochs 50 --lr 1e-5 --calibration-batches 32 --eval-every 1
+```
+
+`calibration-batches 32` 的作用：
+
+- 在 QAT 前，用 val loader 的 32 个 batch 运行 encoder；
+- observer 统计每层激活 min/max，初始化 fake-quant 的 scale/zero_point；
+- 只更新量化参数，不更新网络权重，不使用标签；
+- 默认校准后关闭 observer，后续 50 epoch 使用固定 qparams；
+- 如需训练中继续更新 observer，加 `--keep-observers`。
+- `--eval-every 1`：每个 epoch 跑一次全量 val2017，写入 `eval_history.jsonl`；
+  最终结果写入 `eval.json`。50 次全量评估会增加明显耗时。
+
+产物：
+
+```text
+<output-dir>/
+├── qat_state.pt
+├── quant_config_discovered.json
+├── regional_discovery.json
+├── train_history.json
+└── eval.json
+```
+
+本次不使用 `--teacher-weights` / `--kd-*`，KD 代码保留供后续对照实验。

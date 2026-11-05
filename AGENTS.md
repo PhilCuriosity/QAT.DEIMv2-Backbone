@@ -76,6 +76,8 @@ EOF
 
 `engine/deim/deim_decoder.py` 的 `DEIMTransformer`：
 
+- 已提供 `encode(feats)` / `decode(memory, spatial_shapes, targets)`，`forward` 由二者组合，
+  供 backbone+encoder 部分 QAT 在 decoder 前切分；不改变原始输出。
 - 输入投影 + 锚点生成（sigmoid/inverse-sigmoid 域）+ `enc_score_head` / `enc_bbox_head`。
 - 训练时加入 contrastive denoising（`num_denoising=100`）；部署图不含 denoising。
 - 每层：
@@ -180,10 +182,22 @@ README 公布的 COCO val2017 `AP`（mAP50-95）：
 
 - 已按计划重新建立文档、工具和部分权重：
   - `docs/`：architecture / baseline / qat-pipeline / qat-experiment-plan / qat-experiment-log
-  - `utils/export_fp32_onnx.py`：浮点全模型与 backbone+encoder ONNX 导出
+  - `qat/export_fp32_onnx.py`：浮点全模型与 backbone+encoder ONNX 导出
   - `weights/`：DINOv3-S 权重与 HF safetensors（被 gitignore）
-- `qat/` 代码尚未重建；N/Pico 权重未放入本仓库。
+- `qat/` 路线 B 代码已落地：boundaries / pt2e / regional discovery / 训练 CLI / 回归测试。
 - 已确认 N / Pico / S 的 FP32 基线；其余型号待复测。
-- **首要实验改为 W8A16**：先做 backbone+encoder QAT + FP32 decoder，计划见
+- **首要实验为 W8A16**：backbone+encoder QAT + FP32 decoder，计划见
   `docs/qat-experiment-plan.md`，记录见 `docs/qat-experiment-log.md`。
-- 下一步：搭建 QAT 基础设施，完成 N 的 W8A16 backbone+encoder PTQ/QAT，再扩展到 Pico / S。
+- 模型变更回归测试：`qat/tests/test_model_change.py` 4 passed。
+- N W8A16 backbone+encoder 初步结果（全量 val2017）：
+  - PTQ：21.8150（Δ -21.1674）
+  - QAT 200 step：31.9316（Δ -11.0508）
+  - 尚未达到 <1；200 step 约 3200 张图，远未完成 1 epoch。
+- QAT 图曾导出 QuantONNX（backbone+encoder QAT 2.7MB，decoder FP32 4.3MB；
+  encoder 899 节点 / 233 Q / 376 DQ）；该次 N W8A16 运行目录已按要求删除，指标保留在文档。
+- 联合推理脚本：`qat/infer_quantonnx.py`（默认纯 ONNX Runtime，可选与 converted PT2E 参考对比）。
+- QAT 已支持 LSQ 与蒸馏：`--lsq`、`--teacher-weights` + KD 权重；checkpoint 记录 `use_lsq`/`distill`，导出自动识别 LSQ。
+- LSQ+KD 1-step smoke 和 LSQ QuantONNX 导出已通过；精度待全量训练验证。
+- S W8A8 纯 QAT 首次启动后手动终止（2026-11-05，epoch 0 step 300/3696，无 checkpoint）：
+  产物保留在 `runs/qat/deimv2_s_w8a8_qat_20261105_104136/`（含 `STATUS.md`）。
+- 下一步：用 `weights/deimv2_dinov3_s_coco.pth` 跑 S 的 W8A8 纯 QAT（50 epoch、batch 32、无 KD/LSQ），再扩展到 Pico。
