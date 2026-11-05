@@ -523,9 +523,16 @@ class DEIMTransformer(nn.Module):
         return topk_memory, topk_logits, topk_anchors
 
     def forward(self, feats, targets=None):
-        # input projection and embedding
-        memory, spatial_shapes = self._get_encoder_input(feats)
+        memory, spatial_shapes = self.encode(feats)
+        return self.decode(memory, spatial_shapes, targets)
 
+    def encode(self, feats):
+        """Backbone/encoder boundary: feats -> (memory, spatial_shapes)."""
+        return self._get_encoder_input(feats)
+
+    def decode(self, memory, spatial_shapes, targets=None):
+        """Decoder part from memory onward. Kept separate so partial QAT can
+        freeze the decoder while training the backbone/encoder."""
         # prepare denoising training
         if self.training and self.num_denoising > 0:
             denoising_logits, denoising_bbox_unact, attn_mask, dn_meta = \
