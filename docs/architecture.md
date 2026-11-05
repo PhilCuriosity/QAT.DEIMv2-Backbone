@@ -147,6 +147,69 @@ x = self.decoder(x, targets)  # dict
 注意：`interaction_indexes` 必须与权重训练配置一致。S 的权重必须用 `[3, 7, 11]`；
 HuggingFace `config.json` 的 `[5, 8, 11]` 会掉到 47.0（见 `baseline.md`）。
 
+#### 3.2.1 RoPE 与 Neg 的导出改动（2026-11-05）
+
+`vit_tiny.py` 中的 RoPE 做了两处与导出/量化相关的调整：
+
+1. **`rotate_half` 去掉 `Neg`**
+   - 原实现 `torch.cat((-x2, x1), dim=-1)` 在 ONNX 中产生 24 个 `Neg`（12 层 × q/k），
+     且输入、输出都会被量化。
+   - 改为 `torch.cat((x2 * -1, x1), dim=-1)`，导出为 `Mul`；`-1` 是 Python 标量，
+     不会生成 Q/DQ。数值完全等价。
+2. **RoPE 表预计算（导出前折叠）**
+   - `RopePositionEmbedding.precompute(H, W)` 把 sin/cos 表写入非持久 buffer
+     `_sin_table` / `_cos_table`；`forward` 在 `(H, W)` 命中时直接返回，
+     否则回退到原来的 `arange → meshgrid → angles → sin/cos` 路径。
+   - `VisionTransformer.precompute_rope(image_size)`、
+     `DINOv3STAs.precompute_rope(image_size)` 提供入口；
+     `qat/export.py::export_backbone_encoder` 和 `utils/export_fp32_onnx.py`
+     在导出前调用。
+   - 效果：
+     - 导出图不再包含 `arange/meshgrid/.../Sin/Cos`，表变成常量
+       （640 输入 → `[1,1,1600,64]`）。
+     - W8A8 QuantONNX 中两张表是 2 个 uint8 initializer + 2 个 `DequantizeLinear`，
+       中间链路不再插 Q/DQ。
+     - 数值与现算逐位一致（max diff 0）；FP32 全量 val2017 mAP50-95 = 0.5086
+       （基线 0.509）。
+   - 注意：表按导出分辨率固化；当前导出图本来就被 `encoder.pos_embed2` 固定为 640。
+     训练时若 H/W 不一致会自动回退动态计算。
+
+#### 3.2.2 Attention：默认 SDPA，导出时切显式（2026-11-05）
+
+`vit_tiny.py` 的 `Attention.forward` 默认使用融合的
+`F.scaled_dot_product_attention`。该算子在进行 PT2E 注解时是单个 FX 节点，
+而 `AXQuantizer.OPS` 里没有 `sdpa`，因此 attention 内部
+（`QKᵀ` / `softmax` / `AV`）不会插入任何 Q/DQ。
+
+处理方式：
+
+- `Attention.explicit_attention`（类属性，默认 `False`）控制是否走显式路径：
+  `q * √scale`、`k * √scale` → `q @ kᵀ` → `softmax` → `attn @ v`
+  （scale 拆到 q/k 两侧，与融合 SDPA 的内部顺序一致）。
+- `qat/export.py::export_backbone_encoder` 在 `torch.export` 期间把所有
+  `Attention.explicit_attention` 置为 `True`，导出结束后恢复原值。
+  因此：
+  - eager FP32 评测仍走 SDPA，数值与基线逐位一致（实测 diff = 0）；
+  - QAT 图（prepare / convert / QuantONNX）里是显式 `matmul/softmax`，
+    可以正常插 Q/DQ。
+
+数值差异（单条随机输入，对比 SDPA eager）：
+
+| 输出 | CPU max_abs | CPU 相对误差 | CUDA max_abs | CUDA 相对误差 |
+|---|---:|---:|---:|---:|
+| backbone+encoder `memory` | 1.1e-04 | 2.4e-06 | 3.3e-02 | 4.9e-04 |
+| `pred_logits` | 4.0e-02 | 4.1e-05 | 4.3 | 3.0e-02 |
+| `pred_boxes` | 6.9e-04 | 1.6e-05 | 0.87 | cos 0.93 |
+
+- `torch.export` 抓出的显式图与 eager 显式实现**逐位一致**（0 差异），
+  说明导出本身无误差；与 SDPA 的差异全部来自融合 kernel 与显式
+  `matmul/softmax` 的累加顺序（把 scale 拆到 q/k 两侧并不能消除）。
+- 单层 attention 的差异约 8e-7，经 12 层 ViT 与 decoder TopK 放大到上表量级。
+- CUDA 上差异经 12 层 ViT 和 decoder TopK 放大；QAT 训练使用显式图，
+  量化误差远大于该差异。
+- 该开关只覆盖 `vit_tiny.py` 的 Attention（S/M）。L/X 使用
+  `engine/backbone/dinov3/layers/attention.py`，仍为 SDPA，未纳入。
+
 ## 4. Encoder
 
 ### 4.1 LiteEncoder（Atto / Femto / Pico）
@@ -207,6 +270,11 @@ S/M/L/X 对 stride 32 做 AIFI。
 ## 5. Decoder：DEIMTransformer
 
 代码：`engine/deim/deim_decoder.py`
+
+`DEIMTransformer.forward` 已拆成 `encode(feats)` 与
+`decode(memory, spatial_shapes, targets)`：`encode` 包含 input projection/flatten/concat，
+`decode` 从 denoising 开始。该拆分供 backbone+encoder 部分 QAT 在 decoder 前切分，
+输出与原始 `forward` 一致。
 
 ### 5.1 输入与 query 选择
 
@@ -385,7 +453,11 @@ TopK 的 indices 是整数，不参与 fake-quant；values 的量化策略见
 6. **BN / SyncBN**：可折叠进 Conv；QAT 中保留 running stats。
 7. **LayerNorm / RMSNorm**：通常保持浮点。
 8. **SiLU / GELU / SwiGLU**：逐层范围差异大。
-9. **ViT attention / RoPE**：RoPE 的 sin/cos 保持浮点。
+9. **ViT attention / RoPE**：RoPE 的 sin/cos 表在导出前预计算为常量
+   （`precompute_rope`）；W8A8 下按常量量化一次（2 个 uint8 initializer + 2 个 DQ），
+   中间角度计算不再有 Q/DQ。`rotate_half` 用 `x * -1` 避免 ONNX `Neg`。
+   Attention 默认 SDPA（`sdpa` 不在 `OPS`，内部无 Q/DQ）；QAT 导出时通过
+   `explicit_attention` 切成显式 matmul/softmax，才可注解（见 §3.2.2）。
 10. **Rep 重参数化**：`VGGBlock` / `ConvNormLayer_fuse` 的 deploy 融合要与量化图一致。
 
 ## 10. 代码索引

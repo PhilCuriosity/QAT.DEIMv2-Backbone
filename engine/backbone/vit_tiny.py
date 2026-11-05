@@ -199,6 +199,12 @@ def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
 
 
 class Attention(nn.Module):
+    # When True, forward() uses explicit q@k^T -> softmax -> @v instead of the
+    # fused F.scaled_dot_product_attention.  Eager training/eval keeps the fused
+    # op; qat/export.py flips this flag for graph capture so PT2E can annotate
+    # the matmuls and softmax.
+    explicit_attention = False
+
     def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.):
         super().__init__()
         self.num_heads = num_heads
@@ -225,7 +231,24 @@ class Attention(nn.Module):
             q = torch.cat((q_cls, q_patch), dim=2)
             k = torch.cat((k_cls, k_patch), dim=2)
 
-        x = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=self.attn_drop)
+        if self.explicit_attention:
+            # Separate ops so PT2E can annotate/quantize them (see class doc).
+            # Split the scale across q and k (sqrt each), matching the order
+            # used by the fused SDPA kernel.
+            sqrt_scale = math.sqrt(self.scale)
+            q = q * sqrt_scale
+            k = k * sqrt_scale
+            attn = torch.matmul(q, k.transpose(-2, -1))
+            attn = torch.softmax(attn, dim=-1)
+            if self.attn_drop > 0.0:
+                attn = torch.nn.functional.dropout(
+                    attn, p=self.attn_drop, training=self.training
+                )
+            x = attn @ v
+        else:
+            x = torch.nn.functional.scaled_dot_product_attention(
+                q, k, v, dropout_p=self.attn_drop
+            )
         x = x.transpose(1, 2).reshape([B, N, C])
         x = self.proj(x)
         x = self.proj_drop(x)
