@@ -1473,16 +1473,19 @@ def _annotate_cat(
     module_names: List[str] = None,
     is_global: bool = True,
 ) -> Optional[List[List[Node]]]:
-    cat_partitions = get_source_partitions(gm.graph, [torch.cat], None)
+    cat_partitions = get_source_partitions(gm.graph, [torch.cat, torch.concat], None)
     cat_partitions = list(itertools.chain.from_iterable(cat_partitions.values()))
 
     for cat_partition in cat_partitions:
         cat_node = cat_partition.output_nodes[0]
 
-        if cat_node.target != torch.ops.aten.cat.default:
+        if cat_node.target not in (
+            torch.ops.aten.cat.default,
+            torch.ops.aten.concat.default,
+        ):
             # TODO: change this to AnnotationException
             raise Exception(  # noqa: TRY002
-                f"Expected cat node: torch.ops.aten.cat.default, but found {cat_node.target}"
+                f"Expected cat/concat node, but found {cat_node.target}"
                 " please check if you are calling the correct capture API"
             )
 
