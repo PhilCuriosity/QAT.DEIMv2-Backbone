@@ -1199,6 +1199,7 @@ def _annotate_matmul(
 
     aten_ops = [
         torch.ops.aten.matmul.default,
+        torch.ops.aten.bmm.default,
     ]
     _do_annotate_dyadic(
         gm,
