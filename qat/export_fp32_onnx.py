@@ -11,7 +11,7 @@ numerical differences can change the encoder TopK query selection, which
 permutes decoder outputs even though the model is correct.
 
 Usage:
-  python utils/export_fp32_onnx.py \
+  python -m qat.export_fp32_onnx \
     --config configs/deimv2/deimv2_hgnetv2_n_coco.yml \
     --weights /path/to/deimv2_hgnetv2_n_coco.pth \
     --output-dir runs/export/deimv2_n_fp32_onnx_$(date +%Y%m%d_%H%M%S) \
@@ -103,7 +103,15 @@ def _spatial_shapes(size, feat_strides):
     return [[height // int(stride), width // int(stride)] for stride in feat_strides]
 
 
+def _precompute_rope(model: nn.Module, size) -> None:
+    """Fold RoPE tables into buffers so the ONNX graph has no Sin/Cos."""
+    precompute = getattr(getattr(model, "backbone", None), "precompute_rope", None)
+    if precompute is not None:
+        precompute((int(size[0]), int(size[1])))
+
+
 def export_full(model: nn.Module, size, output: Path, opset: int, batch: int) -> None:
+    _precompute_rope(model, size)
     wrapper = FullModel(model).eval()
     example = _example(size, batch, str(next(model.parameters()).device))
     torch.onnx.export(
@@ -118,6 +126,7 @@ def export_full(model: nn.Module, size, output: Path, opset: int, batch: int) ->
 
 
 def export_backbone_encoder(model: nn.Module, size, output: Path, opset: int, batch: int) -> list[str]:
+    _precompute_rope(model, size)
     wrapper = BackboneEncoder(model).eval()
     example = _example(size, batch, str(next(model.parameters()).device))
     with torch.no_grad():

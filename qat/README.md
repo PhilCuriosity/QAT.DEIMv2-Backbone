@@ -28,6 +28,8 @@ TopK、anchor、decoder、LQE 全部在 FP32 decoder 内，不进入 QAT 图。
 | `regional.py` | 从 FX 图自动发现 regional config 节点 |
 | `train_backbone_encoder.py` | W8A16 QAT 训练 CLI |
 | `export_quantonnx.py` | QAT checkpoint → backbone+encoder QuantONNX + decoder FP32 ONNX |
+| `export_fp32_onnx.py` | FP32 ONNX 导出（full / backbone_encoder / decoder） |
+| `infer_quantonnx.py` | QuantONNX + decoder 联合推理，可选 converted PT2E 参考对比 |
 | `configs/quant/w8a16.json` | U16 激活 / S8 权重 |
 | `configs/task/deimv2_n_w8a16.json` | N 任务配置模板 |
 | `tests/test_model_change.py` | 模型变更 + regional discovery 回归测试 |
@@ -167,6 +169,19 @@ observer 行为：
 - 若同时设置 `--observer-steps N`，会在第 N 个 global step 冻结 observer；默认 `-1` 表示不主动冻结。
 - checkpoint 会记录 `keep_observers` 字段。
 
+## FP32 ONNX 导出
+
+```bash
+python -m qat.export_fp32_onnx \
+  --config configs/deimv2/deimv2_dinov3_s_coco.yml \
+  --weights weights/deimv2_dinov3_s_coco.pth \
+  --output-dir runs/export/deimv2_s_fp32_onnx \
+  --mode both --device cpu
+```
+
+`--mode {both,full,backbone_encoder,decoder,all}`，导出后用 ONNX Runtime CPU 与
+PyTorch CPU 逐输出对比，结果写入 `export_report.json`。
+
 ## QuantONNX 导出
 
 ```bash
@@ -204,13 +219,13 @@ decoder FP32 图 545 → 548 个节点（`program.optimize()` 后 onnxslim 仅�
 
 ```bash
 # 仅 ONNX Runtime
-python utils/infer_quantonnx.py \
+python -m qat.infer_quantonnx \
   --config configs/deimv2/deimv2_hgnetv2_n_coco.yml \
   --onnx-dir runs/qat/<run_dir>/quantonnx \
   --image example.jpg
 
 # 与 converted PT2E 参考对比（需要 FP32 权重构建 decoder）
-python utils/infer_quantonnx.py \
+python -m qat.infer_quantonnx \
   --config configs/deimv2/deimv2_hgnetv2_n_coco.yml \
   --checkpoint runs/qat/<run_dir>/qat_state.pt \
   --weights /path/to/deimv2_hgnetv2_n_coco.pth \

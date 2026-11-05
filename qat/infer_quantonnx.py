@@ -6,7 +6,7 @@ load the state, run the fake-quant encoder and the FP32 decoder, then compare
 with the two ONNX Runtime sessions.
 
 Usage:
-    python utils/infer_quantonnx.py \
+    python -m qat.infer_quantonnx \
       --config configs/deimv2/deimv2_hgnetv2_n_coco.yml \
       --checkpoint runs/qat/<run>/qat_state.pt \
       --image example.jpg
