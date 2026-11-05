@@ -130,6 +130,12 @@ class DINOv3STAs(nn.Module):
             nn.SyncBatchNorm(hidden_dim)
         ])
 
+    def precompute_rope(self, image_size) -> None:
+        """Pre-compute RoPE tables when the backbone supports it."""
+        precompute = getattr(self.dinov3, "precompute_rope", None)
+        if precompute is not None:
+            precompute(image_size)
+
     def forward(self, x):
         # Code for matching with oss
         H_c, W_c = x.shape[2] // 16, x.shape[3] // 16

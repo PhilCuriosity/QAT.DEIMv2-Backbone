@@ -55,9 +55,31 @@ class RopePositionEmbedding(nn.Module):
             torch.empty(head_dim // 4, device=device, dtype=dtype),
             persistent=True,
         )
+        # Optional pre-computed tables (filled by precompute()); non-persistent
+        # so existing checkpoints keep loading unchanged.
+        self.register_buffer("_sin_table", torch.empty(0), persistent=False)
+        self.register_buffer("_cos_table", torch.empty(0), persistent=False)
+        self._table_hw = None
         self._init_weights()
 
+    def precompute(self, H: int, W: int) -> None:
+        """Materialise the sin/cos tables as buffers (call before export).
+
+        The exported graph then contains two constant tables instead of the
+        arange/meshgrid -> angles -> Sin/Cos chain, which removes all
+        intermediate Q/DQ points on the RoPE computation.
+        """
+        sin, cos = self._build_tables(int(H), int(W))
+        self._sin_table = sin
+        self._cos_table = cos
+        self._table_hw = (int(H), int(W))
+
     def forward(self, *, H: int, W: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self._table_hw == (H, W):
+            return self._sin_table, self._cos_table
+        return self._build_tables(H, W)
+
+    def _build_tables(self, H: int, W: int) -> Tuple[torch.Tensor, torch.Tensor]:
         device = self.periods.device
         dtype = self.dtype if self.dtype is not None else torch.get_default_dtype()
         dd = {"device": device, "dtype": dtype}
@@ -110,7 +132,8 @@ def rotate_half(x):
     """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
+    # `x2 * -1` (instead of `-x2`) keeps the ONNX graph free of Neg nodes.
+    return torch.cat((x2 * -1, x1), dim=-1)
 
 
 def apply_rope(x, sin, cos):
@@ -276,6 +299,13 @@ class VisionTransformer(nn.Module):
     def no_weight_decay(self):
         return {'cls_token'}
     
+    def precompute_rope(self, image_size) -> None:
+        """Pre-compute RoPE tables for a fixed (H, W) input size."""
+        height, width = int(image_size[0]), int(image_size[1])
+        self._model.rope_embed.precompute(
+            height // self.patch_size, width // self.patch_size
+        )
+
     def get_model(self):
         return self._model
     
