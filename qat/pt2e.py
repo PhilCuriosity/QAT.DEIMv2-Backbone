@@ -11,6 +11,41 @@ from torch.ao.quantization.quantize_pt2e import convert_pt2e, prepare_qat_pt2e
 from qat.export import export_backbone_encoder
 
 
+def freeze_dropout(model: torch.nn.Module) -> int:
+    """Pin exported dropout nodes to eval mode.
+
+    torch 2.6's ``_replace_dropout`` (called by
+    ``allow_exported_model_train_eval`` / ``move_exported_model_to_train``)
+    hardcodes ``p=0.5`` with ``ignore_literals=True``, so every ``aten.dropout``
+    node becomes ``(x, 0.5, True)`` even when the model was built with p=0.
+    The exported graph is then non-deterministic in train mode and the detector
+    amplifies that noise into unstable gradients.  Set the ``train`` literal to
+    False so dropout stays a no-op.
+    """
+    graph = getattr(model, "graph", None)
+    if graph is None:
+        frozen = 0
+        for module in model.modules():
+            if isinstance(module, torch.nn.modules.dropout._DropoutNd) and module.training:
+                module.eval()
+                frozen += 1
+        return frozen
+    frozen = 0
+    for node in graph.nodes:
+        if node.op != "call_function":
+            continue
+        if str(node.target) not in ("aten.dropout.default", "aten.native_dropout.default"):
+            continue
+        args = list(node.args)
+        if len(args) > 2 and args[2] is not False:
+            args[2] = False
+            node.args = tuple(args)
+            frozen += 1
+    if frozen:
+        model.recompile()
+    return frozen
+
+
 def disable_observers(model: torch.nn.Module) -> int:
     count = 0
     for module in model.modules():

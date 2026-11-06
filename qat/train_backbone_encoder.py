@@ -32,7 +32,7 @@ from qat.boundaries import BackboneEncoderQAT, FrozenDecoder, spatial_shapes_for
 from qat.compat import install_torchvision_compat  # noqa: E402
 from qat.distill import memory_loss, output_distill_loss  # noqa: E402
 from qat.export import export_backbone_encoder  # noqa: E402
-from qat.pt2e import calibrate, disable_observers, prepare_model  # noqa: E402
+from qat.pt2e import calibrate, disable_observers, freeze_dropout, prepare_model  # noqa: E402
 from qat.regional import build_regional_config, discover_regions  # noqa: E402
 
 
@@ -93,6 +93,7 @@ def _evaluate_fake_quant(prepared, decoder, model, cfg, criterion, val_loader, d
     finally:
         if prepared_was_training:
             prepared.train()
+            freeze_dropout(prepared)
         if decoder_was_training:
             decoder.train()
         criterion.train()
@@ -308,6 +309,9 @@ def main() -> int:
         train_loader.set_epoch(1000)
 
     prepared.train()
+    frozen = freeze_dropout(prepared)
+    if frozen:
+        print(f"frozen {frozen} dropout node(s) to eval")
     torch.ao.quantization.enable_fake_quant(prepared)
     optimizer = torch.optim.AdamW(
         [parameter for parameter in prepared.parameters() if parameter.requires_grad],
