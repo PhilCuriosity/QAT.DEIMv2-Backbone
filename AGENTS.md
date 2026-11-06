@@ -10,7 +10,7 @@
 
 ## 工作区与环境
 
-- 工作目录：仓库根目录（上游 DEIMv2，`main` 分支）。
+- 工作目录：仓库根目录（QAT.DEIMv2-Backbone，基于上游 DEIMv2）。
 - 项目解释器：已安装 torch 2.6 的 Python 环境（下文简称“项目 Python”）。
   - Python 3.10.19
   - torch 2.6.0+cu124
@@ -146,30 +146,6 @@ README 公布的 COCO val2017 `AP`（mAP50-95）：
 8. **Rep 重参数化**：`VGGBlock` / `ConvNormLayer_fuse` 的 `convert_to_deploy` 在 QAT 前后必须与量化图一致。
 9. **DINOv3STA**：concat 前后通道域差异大，1×1 Conv + SyncBN 融合处需要逐通道 scale。
 
-## 历史验证结论（W16A16，产物已回退）
-
-2026-11-03/04 曾在 Pico/N 上跑通过完整链路：
-
-`PT2E prepare → observer 校准 → QAT 蒸馏 → fake-quant 全量 eval → convert → QuantONNX → ORT 全量 eval`
-
-全量 val2017 结果（当时产物）：
-
-| 模型 | FP32 | W16A16 PTQ | W16A16 QAT | PTQ ORT | QAT ORT |
-|---|---:|---:|---:|---:|---:|
-| N | 42.9824 | 42.9528 | 42.9678 | 42.4955 | 42.4903 |
-| Pico | 38.4593 | 38.4564 | 38.4756 | 38.2899 | 38.2732 |
-
-所有差距均 < 1。该目录下的代码、权重、checkpoint 和 ONNX 已按要求回退/删除，重新开始时需要重建。
-
-关键经验：
-
-- 不要按输出索引直接做 QAT 蒸馏。encoder TopK 会改变 query 顺序，按索引对齐会破坏模型
-  （N 会从 43.0 掉到 6.8）。
-- 应使用 **Hungarian 匹配蒸馏**：按 teacher top-k 选查询，再与 student 查询做 L1+IoU 匹配后
-  计算 logits/boxes/GIoU loss。
-- 导出稳定性需要处理：anchor 的 `log(0)`/`inf`、deformable attention 的 device/dtype 混用、
-  BN folding 产生的 `Reciprocal`、torchvision 0.21 transform API。
-
 ## 代码与实验约定
 
 - 上游代码尽量少改；QAT 相关新增代码放在独立目录（如 `qat/`），不破坏原始训练入口。
@@ -178,7 +154,7 @@ README 公布的 COCO val2017 `AP`（mAP50-95）：
 - 修改上游代码前先记录 `git diff`；任何“精度达标”结论必须附 FP32 指标、QAT 指标、差值、
   评估命令和 checkpoint SHA256。
 
-## 当前状态（2026-11-04）
+## 当前状态（2026-11-06）
 
 - 已按计划重新建立文档、工具和部分权重：
   - `docs/`：architecture / baseline / qat-pipeline / qat-experiment-plan / qat-experiment-log
@@ -186,8 +162,9 @@ README 公布的 COCO val2017 `AP`（mAP50-95）：
   - `weights/`：DINOv3-S 权重与 HF safetensors（被 gitignore）
 - `qat/` 路线 B 代码已落地：boundaries / pt2e / regional discovery / 训练 CLI / 回归测试。
 - 已确认 N / Pico / S 的 FP32 基线；其余型号待复测。
-- **首要实验为 W8A16**：backbone+encoder QAT + FP32 decoder，计划见
-  `docs/qat-experiment-plan.md`，记录见 `docs/qat-experiment-log.md`。
+- **首要实验为 W8A8**：backbone+encoder QAT + FP32 decoder；配置与命令见
+  `qat/README.md`，记录见 `docs/qat-experiment-log.md`。W8A16 作为对照/回退方案，
+  计划见 `docs/qat-experiment-plan.md`，U16 fused 问题见 `docs/architecture.md` §11.7。
 - 模型变更回归测试：`qat/tests/test_model_change.py` 4 passed。
 - N W8A16 backbone+encoder 初步结果（全量 val2017）：
   - PTQ：21.8150（Δ -21.1674）
@@ -198,6 +175,10 @@ README 公布的 COCO val2017 `AP`（mAP50-95）：
 - 联合推理脚本：`qat/infer_quantonnx.py`（默认纯 ONNX Runtime，可选与 converted PT2E 参考对比）。
 - QAT 已支持 LSQ 与蒸馏：`--lsq`、`--teacher-weights` + KD 权重；checkpoint 记录 `use_lsq`/`distill`，导出自动识别 LSQ。
 - LSQ+KD 1-step smoke 和 LSQ QuantONNX 导出已通过；精度待全量训练验证。
-- S W8A8 纯 QAT 首次启动后手动终止（2026-11-05，epoch 0 step 300/3696，无 checkpoint）：
-  产物保留在 `runs/qat/deimv2_s_w8a8_qat_20261105_104136/`（含 `STATUS.md`）。
-- 下一步：用 `weights/deimv2_dinov3_s_coco.pth` 跑 S 的 W8A8 纯 QAT（50 epoch、batch 32、无 KD/LSQ），再扩展到 Pico。
+- S W8A8 纯 QAT 已在 `runs/qat/deimv2_s_w8a8_qat_20261105_193823` 跑到 epoch 12
+  （best `mAP50-95 = 0.4440`）；该 run 使用修复前代码（S8 softmax qscheme 不一致），
+  已暂停，不能作为交付结果。
+- 已修复 symmetric fake-quant qparams（S8 attention / per-channel weights），并支持
+  `--train-decoder` 的 FP32 decoder 微调（decoder 不进入 PT2E 图）。
+- 下一步：用修复后的代码重启 S W8A8 50 epoch（32 calibration batches、无 KD/LSQ），
+  再扩展到 Pico / N；验收必须跑全量 val2017。
