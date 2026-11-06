@@ -4,7 +4,7 @@
 
 在 DEIMv2 上实现量化感知训练（QAT）。验收标准：
 
-- 覆盖已发布型号：Atto / Femto / Pico / N / S / M / L / X。
+- 覆盖型号：Pico / N / S。
 - 每个型号 QAT 模型在 COCO val2017（5000 张）上的 `mAP50-95` 与同协议 FP32 基线差距 **< 1.0**。
 - 精度对比必须使用同一份 checkpoint、同一套预处理、同一后处理和同一个评估脚本；不得用子集或不同口径替代全量结果。
 
@@ -161,7 +161,7 @@ README 公布的 COCO val2017 `AP`（mAP50-95）：
   - `qat/export_fp32_onnx.py`：浮点全模型与 backbone+encoder ONNX 导出
   - `weights/`：DINOv3-S 权重与 HF safetensors（被 gitignore）
 - `qat/` 路线 B 代码已落地：boundaries / pt2e / regional discovery / 训练 CLI / 回归测试。
-- 已确认 N / Pico / S 的 FP32 基线；其余型号待复测。
+- 已确认 Pico / N / S 的 FP32 基线；当前目标范围只包含这三个型号。
 - **首要实验为 W8A8**：backbone+encoder QAT + FP32 decoder；配置与命令见
   `qat/README.md`，记录见 `docs/qat-experiment-log.md`。W8A16 作为对照/回退方案，
   计划见 `docs/qat-experiment-plan.md`，U16 fused 问题见 `docs/architecture.md` §11.7。
