@@ -28,10 +28,7 @@ QAT 先以 S `W8A8` 和 N `W8A16` 验证链路。
 | HGNetv2-N | `FP32` | `deimv2_hgnetv2_n_coco.yml` | 42.9824 | - | - | - |
 | HGNetv2-Pico | `FP32` | `deimv2_hgnetv2_pico_coco.yml` | 38.4593 | - | - | - |
 | DINOv3-S | `FP32` | `deimv2_dinov3_s_coco.yml` | 50.9000 | - | - | - |
-| HGNetv2-N | `W16A16 fake-quant` | `U16 / S16` | 42.9824 | 42.9678 | -0.0146 | - |
-| HGNetv2-N | `W16A16 ORT` | `U16 / S16` | 42.9824 | 42.4903 | -0.4921 | - |
-| HGNetv2-Pico | `W16A16 fake-quant` | `U16 / S16` | 38.4593 | 38.4756 | +0.0163 | - |
-| HGNetv2-Pico | `W16A16 ORT` | `U16 / S16` | 38.4593 | 38.2732 | -0.1861 | - |
+
 
 注：`W16A16` 行为历史**全网络 QAT**结果，产物已按要求回退，仅作为量化链路参考；
 当前仓库实现的是 backbone + encoder QAT，不能直接把历史数字当作当前代码的交付结果。
@@ -78,11 +75,27 @@ QAT 先以 S `W8A8` 和 N `W8A16` 验证链路。
 
 ```bash
 pip install -r requirements.txt
+# requirements.txt 之外，项目运行/评估还需要以下依赖（如环境未预装）
+pip install PyYAML tensorboard scipy
 ```
 
-已验证环境为 `torch 2.6.0+cu124` / `torchvision 0.21.0+cu124`。`requirements.txt` 包含
-QAT 所需的 `torch`、`onnxruntime`、`onnxscript`、`onnxslim` 等依赖；QAT 入口会自动安装
-torchvision 0.21 兼容层，上游 `train.py` 的 FP32 基线复现见
+已验证环境：
+
+| 组件 | 版本 |
+|---|---:|
+| Python | 3.10.19 |
+| torch | 2.6.0+cu124 |
+| torchvision | 0.21.0+cu124 |
+| onnx | 1.17.0 |
+| onnxruntime | 1.21.0 |
+| onnxscript | 0.6.2 |
+| onnxslim | 0.1.48 |
+| faster-coco-eval | 1.8.0 |
+| tensorboard | 2.21.0 |
+
+`requirements.txt` 覆盖 QAT / ONNX 导出所需的 `torch`、`onnxruntime`、`onnxscript`、
+`onnxslim` 等依赖；`calflops` / `transformers` 仅用于部分上游 benchmark/功能，QAT 链路
+不需要。QAT 入口会自动安装 torchvision 0.21 兼容层，上游 `train.py` 的 FP32 基线复现见
 [`docs/baseline.md`](docs/baseline.md)。
 
 ### 2. 准备数据集与权重
