@@ -80,9 +80,10 @@ QAT 先以 S `W8A8` 和 N `W8A16` 验证链路。
 pip install -r requirements.txt
 ```
 
-已验证环境为 `torch 2.6.0+cu124` / `torchvision 0.21.0+cu124`。`requirements.txt` 仍固定
-`torch==2.5.1` / `torchvision==0.20.1`；QAT 入口会自动安装 torchvision 0.21 兼容层，
-上游 `train.py` 的 FP32 基线复现见 [`docs/baseline.md`](docs/baseline.md)。
+已验证环境为 `torch 2.6.0+cu124` / `torchvision 0.21.0+cu124`。`requirements.txt` 包含
+QAT 所需的 `torch`、`onnxruntime`、`onnxscript`、`onnxslim` 等依赖；QAT 入口会自动安装
+torchvision 0.21 兼容层，上游 `train.py` 的 FP32 基线复现见
+[`docs/baseline.md`](docs/baseline.md)。
 
 ### 2. 准备数据集与权重
 
