@@ -432,6 +432,11 @@ def main() -> int:
     )
     qat_state = raw_checkpoint["qat_model"] if "qat_model" in raw_checkpoint else raw_checkpoint
     prepared.load_state_dict(qat_state, strict=True)
+    train_decoder = bool(raw_checkpoint.get("train_decoder", False))
+    decoder_state = raw_checkpoint.get("decoder")
+    if decoder_state is not None:
+        model.decoder.load_state_dict(decoder_state, strict=True)
+        print("loaded fine-tuned FP32 decoder from QAT checkpoint")
     disable_observers(prepared)
     converted = convert(prepared).to(args.device)
     torch.ao.quantization.allow_exported_model_train_eval(converted)
@@ -467,6 +472,8 @@ def main() -> int:
         "quant_config": str(quant_config.resolve()),
         "quant_config_sha256": sha256(quant_config),
         "use_lsq": use_lsq,
+        "train_decoder": train_decoder,
+        "decoder_checkpoint": decoder_state is not None,
         "backbone_encoder": {
             "path": str(encoder_path),
             "sha256": sha256(encoder_path),

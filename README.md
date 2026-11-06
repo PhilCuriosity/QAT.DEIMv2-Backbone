@@ -2,8 +2,9 @@
 
 本仓库基于 [DEIMv2](https://github.com/Intellindust-AI-Lab/DEIMv2)（上游 `main` 分支），提供
 backbone + encoder 的 PT2E QAT、QuantONNX 导出和 ONNX Runtime 验收工具链，
-decoder 保持 FP32 冻结。当前主目标是 `W8A8`（U8 激活 / S8 权重），
-`W8A16`（U16 激活 / S8 权重）作为对照和回退方案。目标覆盖上游已发布型号
+decoder 默认保持 FP32 冻结；如需微调，使用 `--train-decoder`，但 decoder 仍不进入
+PT2E 图。当前主目标是 `W8A8`（U8 激活 / S8 权重），`W8A16`（U16 激活 / S8 权重）
+作为对照和回退方案。目标覆盖上游已发布型号
 Atto / Femto / Pico / N / S / M / L / X；当前已复现 FP32 的 N / Pico / S，
 QAT 先以 S `W8A8` 和 N `W8A16` 验证链路。
 
@@ -191,6 +192,8 @@ env PYTHONPATH="$PWD" CUDA_DEVICE_ORDER=PCI_BUS_ID \
 - **checkpoint 契约**：每个 epoch 保存 `qat_state_epoch{epoch:02d}.pt`；
   `qat_state.pt` 是指向最新 epoch 的 hardlink；`qat_state_best.pt` 是新的最佳 epoch
   **真实副本**，不是指针。
+- **decoder 训练**：默认冻结；加 `--train-decoder --decoder-lr 1e-6` 可做 FP32 微调，
+  decoder 不进入 PT2E 图。此时 checkpoint 额外保存 `decoder` state，导出会自动加载。
 - **已支持**：W8A8 / W8A16、regional config 自动发现、W8A16 LSQ 与 Hungarian 匹配蒸馏
   （`--lsq`、`--teacher-weights`，本轮默认不启用）。
 - **未接入**：`TopK` 分割的全网络 QAT；当前只实现 backbone + encoder QAT。
@@ -268,6 +271,8 @@ env PYTHONPATH="$PWD" \
 
 - `--checkpoint` 可指定 `qat_state_best.pt` 或任意 `qat_state_epochXX.pt`；默认使用
   `run-dir/qat_state.pt`。
+- 如果 checkpoint 包含微调后的 `decoder` state，导出会自动加载，并写入
+  `decoder_fp32.onnx`。
 - 默认使用 `onnxslim`；关闭用 `--no-slim`。
 - `export_report.json` 记录 SHA256、Q/DQ 计数、encoder / decoder 的 PyTorch vs ORT 误差，
   以及 `merge_consecutive_qdq` / `insert_upstream_qdq_after_views` 的结果。

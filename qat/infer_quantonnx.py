@@ -43,11 +43,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_qat_state(path: Path) -> dict:
-    state = torch.load(path, map_location="cpu")
-    return state["qat_model"] if "qat_model" in state else state
-
-
 def _prepare_reference(config: str, checkpoint: Path, quant_config: Path, size, mode: str = "converted", weights: Path | None = None):
     cfg = YAMLConfig(config)
     if "HGNetv2" in cfg.yaml_cfg:
@@ -64,7 +59,11 @@ def _prepare_reference(config: str, checkpoint: Path, quant_config: Path, size, 
         device="cpu",
         dynamic_batch_max=0,
     )
-    prepared.load_state_dict(_load_qat_state(checkpoint), strict=True)
+    raw_checkpoint = torch.load(checkpoint, map_location="cpu")
+    qat_state = raw_checkpoint["qat_model"] if "qat_model" in raw_checkpoint else raw_checkpoint
+    prepared.load_state_dict(qat_state, strict=True)
+    if isinstance(raw_checkpoint, dict) and raw_checkpoint.get("decoder") is not None:
+        model.decoder.load_state_dict(raw_checkpoint["decoder"], strict=True)
     disable_observers(prepared)
     prepared.eval()
     if mode == "converted":

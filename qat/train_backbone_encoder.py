@@ -122,27 +122,36 @@ def _save_epoch_checkpoint(
     teacher,
     history,
     epoch: int,
+    decoder=None,
 ) -> Path:
     """Save one checkpoint per epoch and keep ``qat_state.pt`` as the latest.
 
     ``qat_state_epoch{epoch:02d}.pt`` is retained for every epoch.  The stable
     ``qat_state.pt`` path is a hardlink to the latest epoch file, so existing
     export tools can keep using it without storing a second 31 MB copy.
+
+    When ``--train-decoder`` is enabled, the fine-tuned FP32 decoder state is
+    stored under ``"decoder"`` in the same checkpoint.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     epoch_path = output_dir / f"qat_state_epoch{epoch:02d}.pt"
-    torch.save(
-        {
-            "qat_model": prepared.state_dict(),
-            "quant_config": str(quant_config),
-            "use_lsq": bool(args.lsq),
-            "keep_observers": bool(args.keep_observers),
-            "distill": teacher is not None,
-            "history": history,
-            "epoch": epoch,
-        },
-        epoch_path,
-    )
+    train_decoder = bool(getattr(args, "train_decoder", False))
+    payload = {
+        "qat_model": prepared.state_dict(),
+        "quant_config": str(quant_config),
+        "use_lsq": bool(args.lsq),
+        "keep_observers": bool(args.keep_observers),
+        "distill": teacher is not None,
+        "train_decoder": train_decoder,
+        "history": history,
+        "epoch": epoch,
+    }
+    if train_decoder:
+        if decoder is None:
+            raise ValueError("decoder state is required when --train-decoder is enabled")
+        decoder_module = getattr(decoder, "decoder", decoder)
+        payload["decoder"] = decoder_module.state_dict()
+    torch.save(payload, epoch_path)
 
     latest_path = output_dir / "qat_state.pt"
     tmp_path = output_dir / ".qat_state.tmp"
@@ -301,6 +310,17 @@ def main() -> int:
     parser.add_argument("--max-steps", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument(
+        "--train-decoder",
+        action="store_true",
+        help="unfreeze and fine-tune the FP32 decoder outside the PT2E graph",
+    )
+    parser.add_argument(
+        "--decoder-lr",
+        type=float,
+        default=1e-5,
+        help="learning rate for the FP32 decoder when --train-decoder is set",
+    )
     parser.add_argument("--calibration-batches", type=int, default=16)
     parser.add_argument("--keep-observers", action="store_true",
                         help="leave observers enabled after calibration; default disables them")
@@ -367,6 +387,15 @@ def main() -> int:
 
     model.decoder.num_denoising = 0
     decoder = FrozenDecoder(model.decoder).to(args.device).train()
+    if args.train_decoder:
+        for parameter in decoder.parameters():
+            if parameter.is_floating_point():
+                parameter.requires_grad_(True)
+        decoder_params = sum(p.numel() for p in decoder.parameters() if p.requires_grad)
+        print(
+            f"FP32 decoder fine-tuning enabled: {decoder_params / 1e6:.2f}M params, "
+            f"lr={args.decoder_lr}"
+        )
 
     teacher = None
     teacher_encoder = None
@@ -391,9 +420,21 @@ def main() -> int:
     if frozen:
         print(f"frozen {frozen} dropout node(s) to eval")
     torch.ao.quantization.enable_fake_quant(prepared)
+    parameter_groups = [
+        {
+            "params": [p for p in prepared.parameters() if p.requires_grad],
+            "lr": args.lr,
+        }
+    ]
+    if args.train_decoder:
+        parameter_groups.append(
+            {
+                "params": [p for p in decoder.parameters() if p.requires_grad],
+                "lr": args.decoder_lr,
+            }
+        )
     optimizer = torch.optim.AdamW(
-        [parameter for parameter in prepared.parameters() if parameter.requires_grad],
-        lr=args.lr,
+        parameter_groups,
         weight_decay=args.weight_decay,
     )
     criterion = cfg.criterion.to(args.device)
@@ -450,7 +491,10 @@ def main() -> int:
                 }
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(prepared.parameters(), 0.1)
+            clip_parameters = list(prepared.parameters())
+            if args.train_decoder:
+                clip_parameters += list(decoder.parameters())
+            torch.nn.utils.clip_grad_norm_(clip_parameters, 0.1)
             optimizer.step()
             if args.observer_steps >= 0 and global_step == args.observer_steps:
                 disable_observers(prepared)
@@ -468,7 +512,7 @@ def main() -> int:
         }
         history.append(record)
         checkpoint_path = _save_epoch_checkpoint(
-            output_dir, prepared, quant_config, args, teacher, history, epoch
+            output_dir, prepared, quant_config, args, teacher, history, epoch, decoder
         )
         print(record, "checkpoint", checkpoint_path.name)
         (output_dir / "train_history.json").write_text(json.dumps(history, indent=2) + "\n")

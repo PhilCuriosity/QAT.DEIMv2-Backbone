@@ -72,6 +72,9 @@ spatial_shapes: [[40, 40], [20, 20]]
 
 因此本方案中 **TopK 不进入 QAT 图**，不会出现 query 重排导致的量化训练问题。
 
+decoder 默认冻结。如需 FP32 微调，可使用 `--train-decoder --decoder-lr 1e-6`；
+decoder 仍不进入 PT2E 图，checkpoint 会额外保存 `decoder` state，导出时自动加载。
+
 ## 3. 与已有两种形态的关系
 
 | 形态 | QAT 图 | TopK | 训练复杂度 | 说明 |

@@ -178,6 +178,33 @@ observer 行为：
 - 若同时设置 `--observer-steps N`，会在第 N 个 global step 冻结 observer；默认 `-1` 表示不主动冻结。
 - checkpoint 会记录 `keep_observers` 字段。
 
+## FP32 decoder 微调（不进入 PT2E）
+
+默认 decoder 保持冻结。加 `--train-decoder` 后：
+
+- decoder 参数解冻，作为独立的 optimizer param group，学习率由 `--decoder-lr` 控制
+  （默认 `1e-5`）；
+- decoder 仍是 FP32，不进入 backbone+encoder 的 PT2E 图；
+- 梯度裁剪同时覆盖 prepared 和 decoder；
+- checkpoint 增加 `"decoder"` state 和 `"train_decoder": true`；
+- `qat.export_quantonnx` 会自动从 checkpoint 加载该 decoder，生成微调后的
+  `decoder_fp32.onnx`。
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m qat.train_backbone_encoder \
+  --config configs/deimv2/deimv2_dinov3_s_coco.yml \
+  --weights weights/deimv2_dinov3_s_coco.pth \
+  --quant-config qat/configs/quant/w8a8.json \
+  --output-dir runs/qat/deimv2_s_w8a8_decoder_$(date +%Y%m%d_%H%M%S) \
+  --data-root "$COCO_ROOT" \
+  --device cuda:0 --batch-size 32 --workers 8 \
+  --epochs 50 --lr 1e-5 --decoder-lr 1e-6 \
+  --calibration-batches 32 --eval-every 1 \
+  --train-decoder
+```
+
+注意：decoder 微调不是 decoder QAT；decoder 仍然没有 Q/DQ 图。
+
 ## FP32 ONNX 导出
 
 ```bash
