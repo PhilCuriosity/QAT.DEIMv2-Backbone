@@ -4,8 +4,7 @@
 backbone + encoder 的 PT2E QAT、QuantONNX 导出和 ONNX Runtime 验收工具链，
 decoder 默认保持 FP32 冻结；如需微调，使用 `--train-decoder`，但 decoder 仍不进入
 PT2E 图。当前主目标是 `W8A8`（U8 激活 / S8 权重），`W8A16`（U16 激活 / S8 权重）
-作为对照和回退方案。目标覆盖上游已发布型号
-Atto / Femto / Pico / N / S / M / L / X；当前已复现 FP32 的 N / Pico / S，
+作为对照和回退方案。目标覆盖 Pico / N / S；当前已复现 FP32 的 Pico / N / S，
 QAT 先以 S `W8A8` 和 N `W8A16` 验证链路。
 
 上游原始 README 见 [DEIMv2 仓库](https://github.com/Intellindust-AI-Lab/DEIMv2)；
