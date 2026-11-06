@@ -105,7 +105,9 @@ python -m qat.train_backbone_encoder ... \
   --kd-giou-weight 2.0
 ```
 
-- teacher：FP32 全模型，冻结
+- teacher：FP32 全模型，冻结；保持 eager SDPA，不切 `explicit_attention`
+- student：backbone+encoder QAT 图使用导出时的显式 attention
+- KD 以真实 FP32 输出为目标，接受 SDPA 与显式路径的数值差异；最终精度看全量 COCO mAP
 - memory cosine loss
 - 最终 logits/boxes/GIoU 使用 Hungarian 匹配，避免 encoder TopK 重排
 - 1-step smoke 已通过；精度待全量训练验证
