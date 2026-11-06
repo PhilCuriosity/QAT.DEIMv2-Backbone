@@ -535,3 +535,188 @@ TopK 的 indices 是整数，不参与 fake-quant；values 的量化策略见
 - `export_report` 的 `passed: false` 是 ORT vs converted PT2E 的执行一致性（mean_abs ~0.08），
   不是精度结论；FP32 参考导出的 ORT 验证是 passed
 
+
+### 11.5 ONNX vs PT2E 差异诊断（2026-11-06）
+
+**现象**：`verify_encoder` 对比 converted PT2E 与 ONNX Runtime，S W8A8 的
+`mean_abs` 约 0.069、`max_abs` 约 3.5，远大于 N W8A16 的 2.4e-4。
+
+**不是导出 pass 造成的**：对同一 checkpoint/输入分阶段导出：
+
+```text
+raw     mean=8.949e-02
+opt     mean=8.949e-02
+slim    mean=8.949e-02
+merge   mean=8.949e-02
+final   mean=8.949e-02
+```
+
+`merge_consecutive_qdq`、`insert_upstream_qdq_after_views`、Identity 插入都没有改变误差；
+原始 `torch.onnx.export` 输出已经是这个差距。
+
+**定位**：用 epoch 10 checkpoint，对 prepared fake-quant 和 converted Q/DQ 逐边对比
+（按 compute 节点名匹配，输入名一致才计入）：
+
+```text
+compared edges: 286
+mismatched:     285
+```
+
+第一个明确的分叉点在 **S8 softmax 输出**：
+
+| | prepared fake-quant | converted Q |
+|---|---|---|
+| dtype | int8 | int8 |
+| qmin/qmax | -127 / 127 | -127 / 127 |
+| qscheme 属性 | `per_tensor_symmetric` | `per_tensor_symmetric` |
+| scale | **0.0039297** | **0.0078594** |
+| zero_point | **-127** | **0** |
+
+softmax 输出范围 [0,1]：
+
+- affine int8：`scale = 1/254 ≈ 0.003937`，`zp = -127`
+- symmetric int8：`scale = 1/127 ≈ 0.007874`，`zp = 0`
+
+两者网格差 2 倍。误差从 softmax 传到 attention/FFN，放大为全图差异
+（silu/gelu max diff 1.5–7.7，matmul 最高 20）。
+
+**根因**：`utils/ax_quantizer.py::_build_act_fake_quant` 对 `moving_avg` 一律使用
+`FusedMovingAvgObsFakeQuantize`。该模块的 forward 走
+`torch.fused_moving_avg_obs_fake_quant`，按 min/max 计算 **affine** scale/zp，
+不理会 `QuantizationSpec` 的 `per_tensor_symmetric`；而 `convert_pt2e` 按 qspec 的
+symmetric qscheme 生成 Q/DQ，于是 prepared 与 converted 不一致。
+
+全局 U8 激活是 `is_symmetric=false`，fused 的 affine 行为与 convert 一致，所以不会
+暴露该问题；只有 regional S8（matmul/softmax）这类 symmetric qspec 会触发。
+
+**影响**：当前 50 epoch QAT 训练用 affine int8 softmax fake-quant，导出会变成
+symmetric int8 softmax，训练图与导出图不一致；ONNX 与 PT2E 的差距主要来自这里。
+
+**修复方向**（尚未实施）：
+
+1. **symmetric qspec 使用非 fused `FakeQuantize`**（推荐）
+   - `FakeQuantize` 按 observer 的 symmetric qscheme 计算 `zp=0`，与 convert 一致；
+   - 全局 U8 非对称仍走 fused，不受影响；
+   - 需要修改 `_build_act_fake_quant` 按 qscheme 选择 fused/非 fused。
+2. S8 regional 改为 affine（`is_symmetric=false`，`qmin=-128/qmax=127`），
+   prepared 与 convert 都走 affine；但 int8 matmul 的 zp≠0，需确认后端是否接受。
+3. 去掉 softmax 的 S8 区域，回到全局 U8；会破坏 attention 内的 S8 连续性。
+
+修复后需要重新验证：prepared softmax 与 converted softmax 的 scale/zp 完全一致，
+再重跑 QAT。
+
+### 11.6 qscheme 修复与 ONNX 残差（2026-11-06）
+
+**修复实施**
+
+- `utils/ax_quantizer.py::_build_act_fake_quant` 增加 `qscheme` 参数：
+  `per_tensor_symmetric` 返回非 fused `FakeQuantize`；全局 U8 affine 仍走
+  `FusedMovingAvgObsFakeQuantize`。
+- `_build_weight_fake_quant` 对 `per_channel_symmetric` 同样改用非 fused
+  `FakeQuantize`。实测 fused kernel 的 per-channel symmetric scale 带有约
+  `255/254`（0.39%）的偏差，虽然 zero_point 通常仍为 0，但与
+  `convert_pt2e` 的 `calculate_qparams()` 不完全一致。
+- 调用点传入 `act_qscheme` / `output_qscheme` / `weight_qscheme`。
+
+**验证（fresh prepare + calibrate 2 batch）**
+
+```text
+softmax prepared: scale 0.0077223, zp 0, FakeQuantize
+softmax converted: scale 0.0077223, zp 0
+weight prepared: cached scale == calculate_qparams()，完全一致
+```
+
+抽样 286 条激活边，qparams 只有 1 条不一致（修复前是 285 条值不一致）。
+
+**仍未解释的 tensor 差异**
+
+```text
+prepared vs converted : mean 0.1185, max 2.80, cos 0.870
+converted vs ORT ALL  : mean 0.1335, max 3.08
+converted vs ORT BASIC: mean 0.1199
+converted vs ORT OFF  : mean 0.1180
+```
+
+首个分叉点是 `conv2d` 的 1.3e-5（PyTorch 与 ORT 的卷积实现/累加顺序不同），
+随后在 Q/DQ 取整处产生 1 个量化步长的翻转，再经 attention/LayerNorm 逐层放大。
+`ORT_ENABLE_ALL` 与 `ORT_DISABLE_ALL` 之间也有 0.125 的差异，说明 ORT 的
+QDQ/Conv 融合会额外改变数值。
+
+**结论**：qscheme/qparam 不一致已经修复；剩余差异不是权重加载、量化配置或
+导出 pass 错误，而是 1e-5 级浮点差异经过不连续量化后的混沌放大。后续验收应
+比较修复后重训模型的全量 COCO mAP（PT2E vs ONNX），不应要求 tensor 逐点相等。
+
+### 11.7 W8A16 U16 fused 问题（待处理，2026-11-06）
+
+N W8A16 smoke（`tmp/opencode/smoke_save_best/qat_state_epoch00.pt`）：
+
+```text
+prepared cached scale:        6.1e-5
+observer calculate_qparams:   2.44e-4
+194 条激活边中 185 条 qparams 不一致
+prepared vs converted:        mean 4.44e-2, max 2.13e-1, cos 0.173
+converted vs ONNX:            mean 2.29e-4, max 1.71e-3, passed
+```
+
+`FusedMovingAvgObsFakeQuantize` 对 U16 的 cached scale 与
+`MovingAverageMinMaxObserver.calculate_qparams()` 不一致（后者被
+`eps=2^-12` 截断）。导出 converted PT2E → ONNX 仍然忠实，但 prepared QAT
+（训练图）与 converted（部署图）不一致。
+
+**暂不处理**：当前 W8A8 不使用 U16 路径。后续修复方向：U16 激活改用
+非 fused `FakeQuantize`，或为 16-bit 设置更小的 `eps`，然后重新验证 W8A16。
+
+### 11.8 关闭 fake quant 的 API 陷阱（2026-11-06）
+
+对比 `prepared`（QAT fake-quant 图）和 FP32 时，误用了：
+
+```python
+torch.ao.quantization.disable_fake_quant(prepared)
+```
+
+该函数只对传入的 module 本身生效，**不会递归到子模块**。PT2E 的
+`prepared` 是一个 GraphModule，fake-quant 都在子模块里，因此这次调用
+实际没有关闭任何 fake quant：
+
+```text
+before: fake_quant modules 624, enabled 624
+after : fake_quant modules 624, enabled 624
+```
+
+结果导致 “FQ on” 和 “FQ off” 的输出完全相同（mean 0.1819），容易误判为
+observer/权重/图有问题。
+
+正确写法：
+
+```python
+prepared.apply(torch.ao.quantization.disable_fake_quant)
+```
+
+或显式遍历子模块：
+
+```python
+for module in prepared.modules():
+    if hasattr(module, "disable_fake_quant"):
+        module.disable_fake_quant()
+```
+
+修正后的对比（S W8A8 smoke，同一 checkpoint / 输入）：
+
+| 配置 | mean_abs | max_abs | cos |
+|---|---:|---:|---:|
+| FP32 vs prepared，FQ on，observer off | 0.1819 | 7.08 | 0.6543 |
+| FP32 vs prepared，FQ off，observer off | **2.6e-7** | 1.9e-4 | **1.0000** |
+| prepared FQ on vs FQ off | 0.1819 | 7.08 | 0.6543 |
+
+同时确认：
+
+```text
+fake-quant 模块数: 624
+observer_enabled=1: 0
+前向前后 scale/zp 不变
+```
+
+即 observer 已正确关闭；差距全部来自 W8A8 fake quantization，而不是
+observer、权重加载或图结构。`qat/pt2e.py::disable_observers` 是显式遍历
+子模块的，所以 observer 的关闭是有效的；只有直接调用
+`torch.ao.quantization.disable_fake_quant(prepared)` 这种方式有递归陷阱。
