@@ -1,8 +1,7 @@
 """Regression tests for backbone+encoder QAT and regional discovery.
 
 Run with:
-    python -m pytest \
-        qat/tests/test_model_change.py -q
+    env PYTHONPATH="$PWD" python -m pytest qat/tests/test_model_change.py -q
 """
 from __future__ import annotations
 

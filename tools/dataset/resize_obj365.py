@@ -109,7 +109,7 @@ def parse_arguments():
         '--base_dir',
         type=str,
         default='data/objects365',
-        help='Base directory of the dataset, e.g., /data/Objects365/data'
+        help='Base directory of the dataset, e.g., data/objects365'
     )
     parser.add_argument(
         '--max_size',

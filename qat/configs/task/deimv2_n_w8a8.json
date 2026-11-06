@@ -4,7 +4,7 @@
   "weights": null,
   "quant_config": "qat/configs/quant/w8a8.json",
   "regional_report": null,
-  "dataset_root": "~/dataset/coco",
+  "dataset_root": "data/coco",
   "input_size": [640, 640],
   "batch_size": 32,
   "num_workers": 8

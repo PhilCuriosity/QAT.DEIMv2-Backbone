@@ -648,7 +648,7 @@ QDQ/Conv 融合会额外改变数值。
 
 ### 11.7 W8A16 U16 fused 问题（待处理，2026-11-06）
 
-N W8A16 smoke（`tmp/opencode/smoke_save_best/qat_state_epoch00.pt`）：
+N W8A16 smoke（`<smoke-run-dir>/qat_state_epoch00.pt`）：
 
 ```text
 prepared cached scale:        6.1e-5

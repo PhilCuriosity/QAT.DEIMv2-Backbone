@@ -1,594 +1,359 @@
-<h2 align="center">
-  Real-Time Object Detection Meets DINOv3
-</h2>
-<h3 align="center">
-  
-  🎉 We’re excited to introduce <a href="https://intellindust-ai-lab.github.io/projects/EdgeCrafter/">EdgeCrafter</a> with SOTA performance on object detection, pose estimation as well as instance segmentation.🎉
-</h3>
+# DEIMv2 QAT
 
-<p align="center">
-    <a href="https://github.com/Intellindust-AI-Lab/DEIMv2/blob/master/LICENSE.md">
-        <img alt="license" src="https://img.shields.io/badge/LICENSE-DEIMv2%20License-blue">
-    </a>
-    <a href="https://arxiv.org/abs/2509.20787">
-        <img alt="arXiv" src="https://img.shields.io/badge/arXiv-2509.20787-red">
-    </a>
-   <a href="https://intellindust-ai-lab.github.io/projects/DEIMv2/">
-        <img alt="project webpage" src="https://img.shields.io/badge/Webpage-DEIMv2-purple">
-    </a>
-    <a href="https://github.com/Intellindust-AI-Lab/DEIMv2/pulls">
-        <img alt="prs" src="https://img.shields.io/github/issues-pr/Intellindust-AI-Lab/DEIMv2">
-    </a>
-    <a href="https://github.com/Intellindust-AI-Lab/DEIMv2/issues">
-        <img alt="issues" src="https://img.shields.io/github/issues/Intellindust-AI-Lab/DEIMv2?color=olive">
-    </a>
-    <a href="https://github.com/Intellindust-AI-Lab/DEIMv2">
-        <img alt="stars" src="https://img.shields.io/github/stars/Intellindust-AI-Lab/DEIMv2">
-    </a>
-    <a href="mailto:shenxi@intellindust.com">
-        <img alt="Contact Us" src="https://img.shields.io/badge/Contact-Email-yellow">
-    </a>
-</p>
+本仓库基于 [DEIMv2](https://github.com/Intellindust-AI-Lab/DEIMv2)（上游 `main` 分支），提供
+backbone + encoder 的 PT2E QAT、QuantONNX 导出和 ONNX Runtime 验收工具链，
+decoder 保持 FP32 冻结。当前主目标是 `W8A8`（U8 激活 / S8 权重），
+`W8A16`（U16 激活 / S8 权重）作为对照和回退方案。目标覆盖上游已发布型号
+Atto / Femto / Pico / N / S / M / L / X；当前已复现 FP32 的 N / Pico / S，
+QAT 先以 S `W8A8` 和 N `W8A16` 验证链路。
 
-<p align="center">
-    DEIMv2 is an evolution of the DEIM framework while leveraging the rich features from DINOv3. Our method is designed with various model sizes, from an ultra-light version up to S, M, L, and X, to be adaptable for a wide range of scenarios. Across these variants, DEIMv2 achieves state-of-the-art performance, with the S-sized model notably surpassing 50 AP on the challenging COCO benchmark.
-</p>
+上游原始 README 见 [DEIMv2 仓库](https://github.com/Intellindust-AI-Lab/DEIMv2)；
+本仓库保留的副本为 `README-org.md`。许可证见 [`LICENSE.md`](./LICENSE.md)。
 
----
+操作建议：先用小批量数据跑 1 个 epoch / 少量 step 的 smoke，检查 `eval_history.jsonl`、
+`export_report.json` 和 `joint_infer_report.json`，再启动 50 epoch 全量训练；
+最终用全量 COCO val2017 比较 FP32、QAT fake-quant 与 QuantONNX 的 `mAP50-95`。
 
+## 精度结果
 
-<div align="center">
-  <a href="http://www.shihuahuang.cn">Shihua Huang</a><sup>1*</sup>,&nbsp;&nbsp;
-  Yongjie Hou<sup>1,2*</sup>,&nbsp;&nbsp;
-  <a href="https://capsule2077.github.io">Longfei Liu<a><sup>1*</sup>,&nbsp;&nbsp;
-  <a href="https://xuanlong-yu.github.io/">Xuanlong Yu</a><sup>1</sup>,&nbsp;&nbsp;
-  <a href="https://xishen0220.github.io">Xi Shen</a><sup>1†</sup>&nbsp;&nbsp;
-</div>
+### 检测
 
-  
-<p align="center">
-<i>
-1. <a href="https://intellindust-ai-lab.github.io"> Intellindust AI Lab</a> &nbsp;&nbsp; 2. Xiamen University &nbsp; <br> 
-* Equal Contribution &nbsp;&nbsp; † Corresponding Author
-</i>
-</p>
+本仓库只覆盖 COCO detection。指标口径为 COCO val2017 全量 5000 张，
+`mAP50-95` 取项目 `CocoEvaluator` 的 `coco_eval_bbox[0]`；预处理、后处理和评估脚本
+必须与 FP32 基线一致。完整协议见 [`docs/baseline.md`](docs/baseline.md)。
 
+| 模型 | 模式 | 配置 | FP32 mAP50-95 | 量化 mAP50-95 | Err mAP:50~95 | 耗时 |
+|---|---|---|---:|---:|---:|---:|
+| HGNetv2-N | `FP32` | `deimv2_hgnetv2_n_coco.yml` | 42.9824 | - | - | - |
+| HGNetv2-Pico | `FP32` | `deimv2_hgnetv2_pico_coco.yml` | 38.4593 | - | - | - |
+| DINOv3-S | `FP32` | `deimv2_dinov3_s_coco.yml` | 50.9000 | - | - | - |
+| HGNetv2-N | `W16A16 fake-quant` | `U16 / S16` | 42.9824 | 42.9678 | -0.0146 | - |
+| HGNetv2-N | `W16A16 ORT` | `U16 / S16` | 42.9824 | 42.4903 | -0.4921 | - |
+| HGNetv2-Pico | `W16A16 fake-quant` | `U16 / S16` | 38.4593 | 38.4756 | +0.0163 | - |
+| HGNetv2-Pico | `W16A16 ORT` | `U16 / S16` | 38.4593 | 38.2732 | -0.1861 | - |
 
-<p align="center">
-<strong>If you like our work, please give us a ⭐!</strong>
-</p>
+注：`W16A16` 行为历史**全网络 QAT**结果，产物已按要求回退，仅作为量化链路参考；
+当前仓库实现的是 backbone + encoder QAT，不能直接把历史数字当作当前代码的交付结果。
+`ORT` 表示 Converted PT2E 导出到 ONNX Runtime 后的结果。`耗时` 尚未在统一板端环境测量，
+统一写 `-`。
 
+> **⚠️ 当前 W8A8 / W8A16 状态**
+>
+> **S W8A8** 的 backbone + encoder QAT 已在 epoch 12 暂停（修复前代码），尚未完成 50 epoch。
+> 当前 fake-quant `mAP50-95 = 44.40`，不能作为交付结果。QuantONNX 的全量 mAP 评估入口尚未接入；
+> `export_report.json` 和 `joint_infer_report.json` 目前只做 tensor 级链路验收。
+>
+> **N W8A16** 的 PTQ 为 `21.8150`，200-step QAT 为 `31.9316`，均未达到 `< 1.0` 目标。
+> W8A16 的 U16 fused qparams 问题见 [`docs/architecture.md`](docs/architecture.md) §11.7，
+> 暂不处理。
 
-<p align="center">
-  <img src="./figures/teaser_a.png" alt="Image 1" width="49%">&nbsp;&nbsp;
-  <img src="./figures/teaser_b.png" alt="Image 2" width="49%">
-</p>
+## 量化配置
 
-</details>
+当前提供两个基础配置；实际训练默认启用 regional config 自动发现，并在 run 目录生成
+`quant_config_discovered.json`。
 
- 
-  
-## 🚀 Updates
-- [x] **\[2026.10.22\]** Fixed the FLOPs calculation logic. Previously, [calculate-flops](https://github.com/MrYxJ/calculate-flops.pytorch) omitted Attention FLOPs resulting in incorrect numbers, which has now been corrected.
-- [x] **\[2026.8.13\]** DEIMv2 has been integrated into [Intel® Geti™](https://github.com/open-edge-platform/geti): fine-tune the DINOv3 S/M/L variants on your own data with no code, train on Intel dGPU / iGPU / CPU, export to OpenVINO™ IR and optimized for INT8 for edge deployment.
-- [x] **\[2026.8.11\]**  [EdgeCrafter](https://intellindust-ai-lab.github.io/projects/EdgeCrafter/) has been accepted for publication in **TMLR 2026**  🎉 🎉.
-- [x] **\[2026.3.20\]** 🔥🔥🔥Hi everyone! **We’re excited to introduce [EdgeCrafter](https://intellindust-ai-lab.github.io/projects/EdgeCrafter/), our latest work that achieves new state-of-the-art performance—faster, more accurate, and easier to use than ever.** It also supports multiple vision tasks, including object detection, instance segmentation, and human pose estimation!
-- [x] **\[2026.1.7\]** STA, introduced in DEIMv2, has been integrated into the SOTA distillation library [LightlyTrain](https://github.com/lightly-ai/lightly-train/blob/1fbe09744891727b4b494583ee62f35e7b7b1668/src/lightly_train/_task_models/dinov3_ltdetr_object_detection/dinov3_vit_wrapper.py#L15), demonstrating its practical value and impact in real-world training pipelines. 
-- [x] **\[2026.1.7\]** FP16 Inference Fix: **Use TensorRT ≥ 10.6 to ensure stable execution and correct detection results.** For detailed deployment instructions, please refer to [Deployment](https://github.com/Intellindust-AI-Lab/DEIMv2?tab=readme-ov-file#4-tools).
-- [x] **\[2025.11.3\]** [We have uploaded our models to Hugging Face](https://huggingface.co/Intellindust)! Thanks to NielsRogge!
-- [x] **\[2025.10.28\]** Optimized the attention module in ViT-Tiny, reducing memory usage by half for the S and M models.
-- [x] **\[2025.10.2\]** [DEIMv2 has been integrated into X-AnyLabeling!](https://github.com/Intellindust-AI-Lab/DEIMv2/issues/25#issue-3473960491) Many thanks to the X-AnyLabeling maintainers for making this possible.
-- [x] **\[2025.9.26\]** Release DEIMv2 series.
+| 配置 | 激活 | 权重 | 用途 |
+|---|---|---|---|
+| `qat/configs/quant/w8a8.json` | U8 | S8 | 当前主目标 |
+| `qat/configs/quant/w8a16.json` | U16 | S8 | 对照与回退 |
 
-## 🧭 Table of Content
-* [1. 🤖 Model Zoo](#1-model-zoo)
-* [2. ⚡ Quick Start](#2-quick-start)
-* [3. 🛠️ Usage](#3-usage)
-* [4. 🧰 Tools](#4-tools)
-* [5. 📜 Citation](#5-citation)
-* [6. 🙏 Acknowledgement](#6-acknowledgement)
-* [7. ⭐ Star History](#7-star-history)
-  
-  
-## 1. Model Zoo
+- 默认 `--auto-regional`：导出 backbone + encoder 的 FX 图，自动发现 matmul、softmax、
+  depthwise conv 等敏感区域，生成 S8 regional config；关闭用 `--no-auto-regional`。
+- 默认校准后关闭 observer，QAT 全程使用固定 qparams；保留 observer 用 `--keep-observers`，
+  或在第 N 个 global step 冻结用 `--observer-steps N`。
+- S8 matmul / softmax、TopK、FDR / `Integral`、anchor 与 RoPE 的量化边界，见
+  [`docs/architecture.md`](docs/architecture.md) 与 [`docs/qat-pipeline.md`](docs/qat-pipeline.md)。
+- `symmetric` qspec 使用非 fused `FakeQuantize`，避免 fused kernel 把 symmetric 算成 affine；
+  细节见 [`docs/architecture.md`](docs/architecture.md) §11.6。
+- 实验计划和记录见 [`docs/qat-experiment-plan.md`](docs/qat-experiment-plan.md)、
+  [`docs/qat-experiment-log.md`](docs/qat-experiment-log.md)。
 
-| Model | Dataset | AP | #Params | GFLOPs | Latency (ms) | config | Hugging Face | checkpoint | log |
-| :---: | :---: | :---: | :---: | :---: |:------------:| :---: | :---: | :---: | :---: |
-| **Atto** | COCO | **23.8** | 0.5M | 0.8 | 1.10 | [yml](./configs/deimv2/deimv2_hgnetv2_atto_coco.yml) | [huggingface](https://huggingface.co/Intellindust/DEIMv2_HGNetv2_ATTO_COCO) | [Google](https://drive.google.com/file/d/18sRJXX3FBUigmGJ1y5Oo_DPC5C3JCgYc/view?usp=sharing) / [Quark](https://pan.quark.cn/s/04c997582fca) | [Google](https://drive.google.com/file/d/1M7FLN8EeVHG02kegPN-Wxf_9BlkghZfj/view?usp=sharing) / [Quark](https://pan.quark.cn/s/7bf3548d3e10) |
-| **Femto** | COCO | **31.0** | 1.0M | 1.7 | 1.45 | [yml](./configs/deimv2/deimv2_hgnetv2_femto_coco.yml) | [huggingface](https://huggingface.co/Intellindust/DEIMv2_HGNetv2_FEMTO_COCO) | [Google](https://drive.google.com/file/d/16hh6l9Oln9TJng4V0_HNf_Z7uYb7feds/view?usp=sharing) / [Quark](https://pan.quark.cn/s/169f3cefec1b) | [Google](https://drive.google.com/file/d/1_KWVfOr3bB5TMHTNOmDIAO-tZJmKB9-b/view?usp=sharing) / [Quark](https://pan.quark.cn/s/9dd5c4940199) |
-| **Pico** | COCO | **38.5** | 1.5M | 5.2 | 2.13 | [yml](./configs/deimv2/deimv2_hgnetv2_pico_coco.yml) | [huggingface](https://huggingface.co/Intellindust/DEIMv2_HGNetv2_PICO_COCO) | [Google](https://drive.google.com/file/d/1PXpUxYSnQO-zJHtzrCPqQZ3KKatZwzFT/view?usp=sharing) / [Quark](https://pan.quark.cn/s/0db5b1dff721) | [Google](https://drive.google.com/file/d/1GwyWotYSKmFQdVN9k2MM6atogpbh0lo1/view?usp=sharing) / [Quark](https://pan.quark.cn/s/5ab2a74bb867) |
-| **N** | COCO | **43.0** | 3.6M | 6.8 | 2.32 | [yml](./configs/deimv2/deimv2_hgnetv2_n_coco.yml) | [huggingface](https://huggingface.co/Intellindust/DEIMv2_HGNetv2_N_COCO) | [Google](https://drive.google.com/file/d/1G_Q80EVO4T7LZVPfHwZ3sT65FX5egp9K/view?usp=sharing) / [Quark](https://pan.quark.cn/s/1f626f191d11) | [Google](https://drive.google.com/file/d/1QhYfRrUy8HrihD3OwOMJLC-ATr97GInV/view?usp=sharing) / [Quark](https://pan.quark.cn/s/54e5c89675b3) |
-| **S** | COCO | **50.9** | 9.7M | 49.5 | 5.78 | [yml](./configs/deimv2/deimv2_dinov3_s_coco.yml) | [huggingface](https://huggingface.co/Intellindust/DEIMv2_DINOv3_S_COCO) | [Google](https://drive.google.com/file/d/1MDOh8UXD39DNSew6rDzGFp1tAVpSGJdL/view?usp=sharing) / [Quark](https://pan.quark.cn/s/f4d05c349a24) | [Google](https://drive.google.com/file/d/1ydA4lWiTYusV1s3WHq5jSxIq39oxy-Nf/view?usp=sharing) / [Quark](https://pan.quark.cn/s/277660d785d2) |
-| **M** | COCO | **53.0** | 18.1M | 84.1 | 8.80 | [yml](./configs/deimv2/deimv2_dinov3_m_coco.yml) | [huggingface](https://huggingface.co/Intellindust/DEIMv2_DINOv3_M_COCO) | [Google](https://drive.google.com/file/d/1nPKDHrotusQ748O1cQXJfi5wdShq6bKp/view?usp=sharing) / [Quark](https://pan.quark.cn/s/68a719248756) | [Google](https://drive.google.com/file/d/1i05Q1-O9UH-2Vb52FpFJ4mBG523GUqJU/view?usp=sharing) / [Quark](https://pan.quark.cn/s/32af04f3e4b4) |
-| **L** | COCO | **56.0** | 32.2M | 144.5 | 10.47 | [yml](./configs/deimv2/deimv2_dinov3_l_coco.yml) | [huggingface](https://huggingface.co/Intellindust/DEIMv2_DINOv3_L_COCO) | [Google](https://drive.google.com/file/d/1dRJfVHr9HtpdvaHlnQP460yPVHynMray/view?usp=sharing) / [Quark](https://pan.quark.cn/s/966b7ef89bdf) | [Google](https://drive.google.com/file/d/13mrQxyrf1kJ45Yd692UQwdb7lpGoqsiS/view?usp=sharing) / [Quark](https://pan.quark.cn/s/182bd52562a7) |
-| **X** | COCO | **57.8** | 50.3M | 200.0 | 13.75 | [yml](./configs/deimv2/deimv2_dinov3_x_coco.yml) | [huggingface](https://huggingface.co/Intellindust/DEIMv2_DINOv3_X_COCO) | [Google](https://drive.google.com/file/d/1pTiQaBGt8hwtO0mbYlJ8nE-HGztGafS7/view?usp=sharing) / [Quark](https://pan.quark.cn/s/038aa966b283) | [Google](https://drive.google.com/file/d/13QV0SwJw1wHl0xHWflZj1KstBUAovSsV/view?usp=drive_link) / [Quark](https://pan.quark.cn/s/333aba42b4bb) |
+## 快速开始
 
+以下命令假设已激活项目 Python 环境（torch 2.6），并直接使用 `python`。
+所有命令使用 `env PYTHONPATH="$PWD"`，确保直接调用仓库内模块。
 
+### 1. 安装依赖
 
-
-## 2. Quick start
-
-### 2.0 Using Models from Hugging Face
-
-We currently release our models on Hugging Face! Here's a simple example. You can see detailed configs and more examples in [hf_models.ipynb](./hf_models.ipynb).
-
-<details>
-<summary> Simple example </summary>
-
-Create a .py file in the directory of DEIMv2, make sure all components are loaded successfully.
-
-```shell
-import torch.nn as nn
-from huggingface_hub import PyTorchModelHubMixin
-
-from engine.backbone import HGNetv2, DINOv3STAs
-from engine.deim import HybridEncoder, LiteEncoder
-from engine.deim import DFINETransformer, DEIMTransformer
-from engine.deim.postprocessor import PostProcessor
-
-
-class DEIMv2(nn.Module, PyTorchModelHubMixin):
-    def __init__(self, config):
-        super().__init__()
-        self.backbone = DINOv3STAs(**config["DINOv3STAs"])
-        self.encoder = HybridEncoder(**config["HybridEncoder"])
-        self.decoder = DEIMTransformer(**config["DEIMTransformer"])
-        self.postprocessor = PostProcessor(**config["PostProcessor"])
-
-    def forward(self, x, orig_target_sizes):
-        x = self.backbone(x)
-        x = self.encoder(x)
-        x = self.decoder(x)
-        x = self.postprocessor(x, orig_target_sizes)
-
-        return x
-
-deimv2_s_config = {
-  "DINOv3STAs": {
-    ...
-  },
-  ...
-}
-
-deimv2_s_hf = DEIMv2.from_pretrained("Intellindust/DEIMv2_DINOv3_S_COCO")
-```
-</details>
-
-### 2.1 Environment Setup
-
-```shell
-# You can use PyTorch 2.5.1 or 2.4.1. We have not tried other versions, but we recommend that the PyTorch version be 2.0 or higher.
-
-conda create -n deimv2 python=3.11 -y
-conda activate deimv2
+```bash
 pip install -r requirements.txt
 ```
 
+已验证环境为 `torch 2.6.0+cu124` / `torchvision 0.21.0+cu124`。`requirements.txt` 仍固定
+`torch==2.5.1` / `torchvision==0.20.1`；QAT 入口会自动安装 torchvision 0.21 兼容层，
+上游 `train.py` 的 FP32 基线复现见 [`docs/baseline.md`](docs/baseline.md)。
 
-### 2.2 Data Preparation
+### 2. 准备数据集与权重
 
-<details open>
-<summary> 2.2.1 COCO2017 Dataset </summary>
+COCO 数据目录：
 
-Follow the steps below to prepare COCO dataset:
-
-1. Download COCO2017 from [OpenDataLab](https://opendatalab.com/OpenDataLab/COCO_2017) or [COCO](https://cocodataset.org/#download).
-2. Modify paths in [coco_detection.yml](./configs/dataset/coco_detection.yml)
-
-    ```yaml
-    train_dataloader:
-        img_folder: /data/COCO2017/train2017/
-        ann_file: /data/COCO2017/annotations/instances_train2017.json
-    val_dataloader:
-        img_folder: /data/COCO2017/val2017/
-        ann_file: /data/COCO2017/annotations/instances_val2017.json
-    ```
-
-</details>
-
-
-<details>
-<summary>2.2.2 (Optional) Custom Dataset</summary>
-
-To train on your custom dataset, you need to organize it in the COCO format. Follow the steps below to prepare your dataset:
-
-1. **Set `remap_mscoco_category` to `False`:**
-
-    This prevents the automatic remapping of category IDs to match the MSCOCO categories.
-
-    ```yaml
-    remap_mscoco_category: False
-    ```
-
-2. **Organize Images:**
-
-    Structure your dataset directories as follows:
-
-    ```shell
-    dataset/
-    ├── images/
-    │   ├── train/
-    │   │   ├── image1.jpg
-    │   │   ├── image2.jpg
-    │   │   └── ...
-    │   ├── val/
-    │   │   ├── image1.jpg
-    │   │   ├── image2.jpg
-    │   │   └── ...
-    └── annotations/
-        ├── instances_train.json
-        ├── instances_val.json
-        └── ...
-    ```
-
-    - **`images/train/`**: Contains all training images.
-    - **`images/val/`**: Contains all validation images.
-    - **`annotations/`**: Contains COCO-formatted annotation files.
-
-3. **Convert Annotations to COCO Format:**
-
-    If your annotations are not already in COCO format, you'll need to convert them. You can use the following Python script as a reference or utilize existing tools:
-
-    ```python
-    import json
-
-    def convert_to_coco(input_annotations, output_annotations):
-        # Implement conversion logic here
-        pass
-
-    if __name__ == "__main__":
-        convert_to_coco('path/to/your_annotations.json', 'dataset/annotations/instances_train.json')
-    ```
-
-4. **Update Configuration Files:**
-
-    Modify your [custom_detection.yml](./configs/dataset/custom_detection.yml).
-
-    ```yaml
-    task: detection
-
-    evaluator:
-      type: CocoEvaluator
-      iou_types: ['bbox', ]
-
-    num_classes: 777 # your dataset classes
-    remap_mscoco_category: False
-
-    train_dataloader:
-      type: DataLoader
-      dataset:
-        type: CocoDetection
-        img_folder: /data/yourdataset/train
-        ann_file: /data/yourdataset/train/train.json
-        return_masks: False
-        transforms:
-          type: Compose
-          ops: ~
-      shuffle: True
-      num_workers: 4
-      drop_last: True
-      collate_fn:
-        type: BatchImageCollateFunction
-
-    val_dataloader:
-      type: DataLoader
-      dataset:
-        type: CocoDetection
-        img_folder: /data/yourdataset/val
-        ann_file: /data/yourdataset/val/ann.json
-        return_masks: False
-        transforms:
-          type: Compose
-          ops: ~
-      shuffle: False
-      num_workers: 4
-      drop_last: False
-      collate_fn:
-        type: BatchImageCollateFunction
-    ```
-
-</details>
-
-### 2.3 Backbone Preparation
-
-- **Versions based on HGNetv2**: Backbones will be downloaded automatically during training, so you don't need to worry.
-
-- **DEIMv2-L and X**: We use DINOv3-S and S+ as backbone, you can download them following the guide in [DINOv3](https://github.com/facebookresearch/dinov3).
-
-- **DEIMv2-S and M**: We use our ViT-Tiny and ViT-Tiny+ distilled from DINOv3-S, you can download them from [ViT-Tiny](https://drive.google.com/file/d/1YMTq_woOLjAcZnHSYNTsNg7f0ahj5LPs/view?usp=sharing) and [ViT-Tiny+](https://drive.google.com/file/d/1COHfjzq5KfnEaXTluVGEOMdhpuVcG6Jt/view?usp=sharing).
-
-Place dinov3 and vits into ./ckpts folder as:
-
-```shell
-ckpts/
-├── dinov3_vits16.pth
-├── vitt_distill.pt
-├── vittplus_distill.pt
-└── ...
+```text
+$COCO_ROOT/
+├── train2017/
+├── val2017/
+└── annotations/
+    ├── instances_train2017.json
+    └── instances_val2017.json
 ```
 
+`COCO_ROOT` 指向本地 COCO 数据根目录；项目 YAML 中的数据路径可能是占位路径，运行时用
+`--data-root "$COCO_ROOT"` 覆盖。FP32 基线需要按 [`docs/baseline.md`](docs/baseline.md)
+生成临时 YAML。开始前先设置：
 
-## 3. Usage
-<details open>
-<summary> 3.1 COCO2017 </summary>
+```bash
+export COCO_ROOT=/path/to/coco
+```
 
-1. Training
-    ```shell
-    # for ViT-based variants
-    CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_dinov3_${model}_coco.yml --use-amp --seed=0
+权重不提交到仓库。按模型下载官方 checkpoint，并转换为 `{'model': state_dict}`：
 
-    # for HGNetv2-based variants
-    CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_hgnetv2_${model}_coco.yml --use-amp --seed=0
-    ```
+```text
+weights/
+├── deimv2_hgnetv2_n_coco.pth
+├── deimv2_hgnetv2_pico_coco.pth
+└── deimv2_dinov3_s_coco.pth
+```
 
-2. Testing
-    ```shell
-    # for ViT-based variants
-    CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_dinov3_${model}_coco.yml --test-only -r model.pth
+来源：HuggingFace `Intellindust/DEIMv2_*_COCO` 或 README-org.md 中的 Google Drive / Quark。
+DINOv3-S 必须使用项目 YAML 的 `interaction_indexes: [3, 7, 11]`；HF `config.json` 的
+`[5, 8, 11]` 只有 `47.0`。
 
-    # for HGNetv2-based variants
-    CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_hgnetv2_${model}_coco.yml --test-only -r model.pth
-    ```
+### 3. 运行 Smoke
 
-3. Tuning
-    ```shell
-    # for ViT-based variants
-    CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_dinov3_${model}_coco.yml --use-amp --seed=0 -t model.pth
+先用 N 的 W8A16 跑 2 step，验证 prepare、伪量化、反向、保存和评估链路：
 
-    # for HGNetv2-based variants
-    CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --master_port=7777 --nproc_per_node=4 train.py -c configs/deimv2/deimv2_hgnetv2_${model}_coco.yml --use-amp --seed=0 -t model.pth
-    ```
-</details>
+```bash
+env PYTHONPATH="$PWD" \
+  python -m qat.train_backbone_encoder \
+  --config configs/deimv2/deimv2_hgnetv2_n_coco.yml \
+  --weights weights/deimv2_hgnetv2_n_coco.pth \
+  --quant-config qat/configs/quant/w8a16.json \
+  --output-dir runs/qat/smoke_n_w8a16_$(date +%Y%m%d_%H%M%S) \
+  --data-root "$COCO_ROOT" \
+  --device cuda:0 \
+  --epochs 1 --max-steps 2 --batch-size 2 --workers 2 \
+  --calibration-batches 2 --eval-every 1 --eval-max-batches 1
+```
 
-<details>
-<summary> 3.2 (Optional) Customizing Batch Size </summary>
+- **Smoke 指标**：`--eval-max-batches 1` 只评估 1 个 batch，mAP 仅用于链路验收，
+  不能与全量结果比较。
+- **已支持**：FX export、PT2E prepare/calibrate、fake-quant QAT、每 epoch checkpoint、
+  评估历史、QuantONNX 导出。
+- **未接入**：独立的 QAT checkpoint 全量评估 CLI；当前评估由训练脚本 `--eval-every` 完成。
+- **⚠️ 仅链路验收，精度未调优**：2-step smoke 不能判断精度；完整精度需要跑满 epoch
+  后评估全量 val2017。
 
-For example, if you want to use **DEIMv2-S** and  double the total batch size to 64 when training **DEIMv2** on COCO2017, here are the steps you should follow:
+smoke 产物：
 
-1. **Modify your [deimv2_dinov3_s_coco.yml](./configs/deimv2/deimv2_dinov3_s_coco.yml)** to increase the `total_batch_size`:
+```text
+<output-dir>/
+├── qat_state_epoch00.pt
+├── qat_state.pt              # 最新 epoch 的 hardlink
+├── qat_state_best.pt         # 最佳 epoch 的真实副本
+├── quant_config_discovered.json
+├── regional_discovery.json
+├── train_history.json
+└── eval_history.jsonl
+```
 
-    ```yaml
-    train_dataloader:
-      total_batch_size: 64 
-      dataset: 
-        transforms:
-          ops:
-            ...
-    
-      collate_fn:
-        ...
-    ```
+### 4. 正式训练
 
-2. **Modify your [deimv2_dinov3_s_coco.yml](./configs/deimv2/deimv2_dinov3_s_coco.yml)**. Here’s how the key parameters should be adjusted:
+#### 检测
 
-    ```yaml
-    optimizer:
-      type: AdamW
-    
-      params: 
-        -
-          # except norm/bn/bias in self.dinov3
-          params: '^(?=.*.dinov3)(?!.*(?:norm|bn|bias)).*$'  
-          lr: 0.00005  # doubled, linear scaling law
-        -
-          # including all norm/bn/bias in self.dinov3
-          params: '^(?=.*.dinov3)(?=.*(?:norm|bn|bias)).*$'    
-          lr: 0.00005   # doubled, linear scaling law
-          weight_decay: 0.
-        - 
-          # including all norm/bn/bias except for the self.dinov3
-          params: '^(?=.*(?:sta|encoder|decoder))(?=.*(?:norm|bn|bias)).*$'
-          weight_decay: 0.
-    
-      lr: 0.0005   # linear scaling law if needed
-      betas: [0.9, 0.999]
-      weight_decay: 0.0001
-   
-    ema:  # added EMA settings
-      decay: 0.9998  # adjusted by 1 - (1 - decay) * 2
-      warmups: 500  # halved
-   
-    lr_warmup_scheduler:
-      warmup_duration: 250  # halved
-    ```
+以 S W8A8 为例；N / Pico 只替换 `--config`、`--weights` 和 batch 大小：
 
-</details>
+```bash
+env PYTHONPATH="$PWD" CUDA_DEVICE_ORDER=PCI_BUS_ID \
+  python -m qat.train_backbone_encoder \
+  --config configs/deimv2/deimv2_dinov3_s_coco.yml \
+  --weights weights/deimv2_dinov3_s_coco.pth \
+  --quant-config qat/configs/quant/w8a8.json \
+  --output-dir runs/qat/deimv2_s_w8a8_qat_$(date +%Y%m%d_%H%M%S) \
+  --data-root "$COCO_ROOT" \
+  --device cuda:0 \
+  --batch-size 32 --workers 8 \
+  --epochs 50 --lr 1e-5 \
+  --calibration-batches 32 --eval-every 1
+```
 
+模型与入口：
 
-<details>
-<summary> 3.3 (Optional) Customizing Input Size </summary>
+| 模型 | config | weights | 建议 batch |
+|---|---|---|---:|
+| HGNetv2-N | `configs/deimv2/deimv2_hgnetv2_n_coco.yml` | `weights/deimv2_hgnetv2_n_coco.pth` | 32 |
+| HGNetv2-Pico | `configs/deimv2/deimv2_hgnetv2_pico_coco.yml` | `weights/deimv2_hgnetv2_pico_coco.pth` | 32 |
+| DINOv3-S | `configs/deimv2/deimv2_dinov3_s_coco.yml` | `weights/deimv2_dinov3_s_coco.pth` | 32 |
 
-If you'd like to train **DEIMv2-S** on COCO2017 with an input size of 320x320, follow these steps:
+注：上表按 `W8A8` 训练；N 的 `W8A16` 建议 batch 16（见
+`qat/configs/task/deimv2_n_w8a16.json`）。
 
-1. **Modify your  [deimv2_dinov3_s_coco.yml](./configs/deimv2/deimv2_dinov3_s_coco.yml)**:
+- **输出契约**：`backbone_encoder_qat.onnx` 输出 `memory [1, N_tokens, hidden_dim]`；
+  `decoder_fp32.onnx` 输出 `pred_logits [1, 300, 80]`、`pred_boxes [1, 300, 4]`。
+- **checkpoint 契约**：每个 epoch 保存 `qat_state_epoch{epoch:02d}.pt`；
+  `qat_state.pt` 是指向最新 epoch 的 hardlink；`qat_state_best.pt` 是新的最佳 epoch
+  **真实副本**，不是指针。
+- **已支持**：W8A8 / W8A16、regional config 自动发现、W8A16 LSQ 与 Hungarian 匹配蒸馏
+  （`--lsq`、`--teacher-weights`，本轮默认不启用）。
+- **未接入**：`TopK` 分割的全网络 QAT；当前只实现 backbone + encoder QAT。
+- **⚠️ 全量 val2017 评估**：`--eval-every 1` 每个 epoch 都会跑 5000 张，50 epoch 耗时较长；
+  中断训练前请保留 `qat_state_best.pt` 和对应 `qat_state_epochXX.pt`。
 
-    ```yaml
-    eval_spatial_size: [320, 320]
-   
-    train_dataloader:
-      # Here we set the total_batch_size to 64 as an example.
-      total_batch_size: 64 
-      dataset: 
-        transforms:
-          ops:
-            #  Especially for Mosaic augmentation, it is recommended that output_size = input_size / 2.
-            - {type: Mosaic, output_size: 160, rotation_range: 10, translation_range: [0.1, 0.1], scaling_range: [0.5, 1.5],
-               probability: 1.0, fill_value: 0, use_cache: True, max_cached_images: 50, random_pop: True}
-            ...
-            - {type: Resize, size: [320, 320], }
-            ...
-        collate_fn:
-          base_size: 320
-          ...
+### 5. 评估精度
 
-    val_dataloader:
-      dataset:
-        transforms:
-          ops:
-            - {type: Resize, size: [320, 320], }
-            ...
-    ```
-   
-</details>
+#### 检测
 
-<details>
-<summary> 3.4 (Optional) Customizing Epoch </summary>
+FP32 基线按 [`docs/baseline.md`](docs/baseline.md) 的完整命令复现，使用
+`train.py --test-only` 和临时 YAML 覆盖 COCO 路径：
 
-If you want to finetune **DEIMv2-S** for **20** epochs, follow these steps (for reference only; feel free to adjust them according to your needs):
+```bash
+mkdir -p runs/baseline
+cat > runs/baseline/deimv2_baseline_s.yml <<EOF
+__include__: ['$PWD/configs/deimv2/deimv2_dinov3_s_coco.yml']
 
-```yml
-epoches: 32 #  Total epochs: 20 for training + EMA  for 4n = 12. n refers to the model size in the matched config.
-
-flat_epoch: 14    # 4 + 20 // 2
-no_aug_epoch: 12  # 4n
-
+output_dir: runs/baseline/deimv2_baseline_s
 train_dataloader:
-  dataset: 
-    transforms:
-      ops:
-        ...
-      policy:
-        epoch: [4, 14, 20]   # [start_epoch, flat_epoch, epoches - no_aug_epoch]
+  dataset:
+    img_folder: $COCO_ROOT/train2017/
+    ann_file: $COCO_ROOT/annotations/instances_train2017.json
+val_dataloader:
+  dataset:
+    img_folder: $COCO_ROOT/val2017/
+    ann_file: $COCO_ROOT/annotations/instances_val2017.json
+  num_workers: 8
+EOF
 
-  collate_fn:
-    ...
-    mixup_epochs: [4, 14]  # [start_epoch, flat_epoch]
-    stop_epoch: 20  # epoches - no_aug_epoch
-    copyblend_epochs: [4, 20]  # [start_epoch, epoches - no_aug_epoch]
-  
-DEIMCriterion:
-  matcher:
-    ...
-    matcher_change_epoch: 18  # ~90% of (epoches - no_aug_epoch)
+env PYTHONPATH="$PWD" \
+  python train.py \
+  -c runs/baseline/deimv2_baseline_s.yml \
+  --test-only \
+  -r weights/deimv2_dinov3_s_coco.pth \
+  -d cuda:0
 ```
 
-</details>
+如遇 torchvision 0.21 的 transform API 不兼容，使用
+[`docs/baseline.md`](docs/baseline.md) 中的兼容脚本运行同一份 YAML。
 
-## 4. Tools
-<details>
-<summary> 4.1 Deployment </summary>
+QAT fake-quant 的全量评估由训练脚本的 `--eval-every` / `--eval` 完成，结果写入：
 
-1. Setup
-    ```shell
-    pip install onnx onnxsim
-    ```
-
-2. Export onnx
-    ```shell
-    python tools/deployment/export_onnx.py --check -c configs/deimv2/deimv2_dinov3_${model}_coco.yml -r model.pth
-    ```
-
-3. Export [tensorrt](https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html)
-    ```shell
-    trtexec --onnx="model.onnx" --saveEngine="model.engine" --fp16
-    ```
-
-⚠️ **TensorRT Version Notes**
-
-- ✅ Recommended: **Use TensorRT ≥ 10.6 for FP16 inference** to ensure stable execution and correct detection results.
-
-- ❗ Known Issue: With TensorRT 10.4, FP16 inference may produce incorrect outputs.
-
-- 🔧 Workarounds for older versions (e.g., 10.4):
-
-  - Run inference in FP32 mode, or
-
-  - Carefully validate the exported engine and end-to-end pipeline to confirm numerical correctness and detection performance.
-
-
-</details>
-
-<details>
-<summary> 4.2 Inference (Visualization) </summary>
-
-
-1. Setup
-    ```shell
-    pip install -r tools/inference/requirements.txt
-    ```
-
-
-2. Inference (onnxruntime / tensorrt / torch)
-
-    Inference on images and videos is now supported.
-
-    ```shell
-    python tools/inference/onnx_inf.py --onnx model.onnx --input image.jpg  # video.mp4
-    python tools/inference/trt_inf.py --trt model.engine --input image.jpg
-    python tools/inference/torch_inf.py -c configs/deimv2/deimv2_dinov3_${model}_coco.yml -r model.pth --input image.jpg --device cuda:0
-    ```
-</details>
-
-<details>
-<summary> 4.3 Benchmark </summary>
-
-1. Setup
-    ```shell
-    pip install -r tools/benchmark/requirements.txt
-    ```
-
-2. Model FLOPs, MACs, and Params
-    ```shell
-    python tools/benchmark/get_info.py -c configs/deimv2/deimv2_dinov3_${model}_coco.yml
-    ```
-
-2. TensorRT Latency
-    ```shell
-    python tools/benchmark/trt_benchmark.py --COCO_dir path/to/COCO2017 --engine_dir model.engine
-    ```
-</details>
-
-<details>
-<summary> 4.4 Fiftyone Visualization  </summary>
-
-1. Setup
-    ```shell
-    pip install fiftyone
-    ```
-2. Voxel51 Fiftyone Visualization ([fiftyone](https://github.com/voxel51/fiftyone))
-    ```shell
-    python tools/visualization/fiftyone_vis.py -c configs/deimv2/deimv2_dinov3_${model}_coco.yml -r model.pth
-    ```
-</details>
-
-<details>
-<summary> 4.5 Others </summary>
-
-1. Auto Resume Training
-    ```shell
-    bash reference/safe_training.sh
-    ```
-
-2. Converting Model Weights
-    ```shell
-    python reference/convert_weight.py model.pth
-    ```
-</details>
-
-
-## 5. Citation
-If you use `DEIMv2` or its methods in your work, please cite the following BibTeX entries:
-
-```latex
-@article{huang2025deimv2,
-  title={Real-Time Object Detection Meets DINOv3},
-  author={Huang, Shihua and Hou, Yongjie and Liu, Longfei and Yu, Xuanlong and Shen, Xi},
-  journal={arXiv},
-  year={2025}
-}
+```text
+<run-dir>/eval_history.jsonl   # 每个评估 epoch 的完整 12 项 COCO 指标
+<run-dir>/eval.json            # 最后一次评估结果
 ```
 
-## 6. License
+```bash
+# 查看每个 epoch 的 mAP50-95
+cat runs/qat/<run-dir>/eval_history.jsonl
+```
 
-This project is released under the DEIMv2 License. See the [LICENSE](./LICENSE.md) file for details.
+当前没有独立的 “QAT checkpoint → 全量 mAP” CLI；评估必须复用训练脚本的
+`_evaluate_fake_quant`，保证 observer 冻结、decoder FP32、后处理与基线一致。
 
-For commercial licensing inquiries, please [Contact Us](https://www.intellindust.cn/#contact) or email shenxi@intellindust.com.
+### 6. 导出 QuantONNX
 
-## 7. Acknowledgement
-Our work is built upon [LightlyTrain](https://github.com/lightly-ai/lightly-train), [D-FINE](https://github.com/Peterande/D-FINE), [RT-DETR](https://github.com/lyuwenyu/RT-DETR), [DEIM](https://github.com/ShihuaHuang95/DEIM), and [DINOv3](https://github.com/facebookresearch/dinov3). Thanks for their great work!
+#### 检测
 
-✨ Feel free to contribute and reach out if you have any questions! ✨
+导出用 FP32 权重构建模型，再用 QAT checkpoint 覆盖 backbone + encoder；输出静态
+batch=1 的 `backbone_encoder_qat.onnx` 和 `decoder_fp32.onnx`：
 
-## 8. Star History
+```bash
+env PYTHONPATH="$PWD" \
+  python -m qat.export_quantonnx \
+  --config configs/deimv2/deimv2_dinov3_s_coco.yml \
+  --weights weights/deimv2_dinov3_s_coco.pth \
+  --run-dir runs/qat/<run-dir> \
+  --checkpoint runs/qat/<run-dir>/qat_state_best.pt \
+  --quant-config runs/qat/<run-dir>/quant_config_discovered.json \
+  --output-dir runs/export/<run-dir>_quantonnx \
+  --device cpu --opset 21 --input-size 640 640
+```
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Intellindust-AI-Lab/DEIMv2&type=Date)](https://www.star-history.com/#Intellindust-AI-Lab/DEIMv2&Date)
+- `--checkpoint` 可指定 `qat_state_best.pt` 或任意 `qat_state_epochXX.pt`；默认使用
+  `run-dir/qat_state.pt`。
+- 默认使用 `onnxslim`；关闭用 `--no-slim`。
+- `export_report.json` 记录 SHA256、Q/DQ 计数、encoder / decoder 的 PyTorch vs ORT 误差，
+  以及 `merge_consecutive_qdq` / `insert_upstream_qdq_after_views` 的结果。
+- **⚠️ tensor 误差通过不等于全量 mAP 通过**；最终验收必须跑 COCO val2017。
+
+### 7. 验收 QuantONNX
+
+#### 检测
+
+用 `infer_quantonnx` 同时跑 ONNX Runtime 的 encoder + decoder，并与 converted PT2E
+参考做 Hungarian 匹配对比：
+
+```bash
+env PYTHONPATH="$PWD" \
+  python -m qat.infer_quantonnx \
+  --config configs/deimv2/deimv2_dinov3_s_coco.yml \
+  --checkpoint runs/qat/<run-dir>/qat_state_best.pt \
+  --weights weights/deimv2_dinov3_s_coco.pth \
+  --onnx-dir runs/export/<run-dir>_quantonnx \
+  --image example.jpg \
+  --reference-mode converted
+```
+
+产物：
+
+```text
+runs/export/<run-dir>_quantonnx/
+├── backbone_encoder_qat.onnx
+├── decoder_fp32.onnx
+├── export_report.json
+├── joint_output.npz
+└── joint_infer_report.json
+```
+
+`joint_infer_report.json` 包含：
+
+- `memory`：encoder 输出的逐元素误差；
+- `logits` / `boxes`：按 Hungarian 匹配后的误差，避免 TopK query 顺序影响；
+- `passed`：`matched_query` 的 logits / boxes `mean_abs` 是否都不超过 `--atol`
+  （默认 `5e-3`）。
+
+#### 输出契约
+
+| 图 | 输入 | 输出 |
+|---|---|---|
+| `backbone_encoder_qat.onnx` | `images [1,3,640,640]` | `memory [1,N_tokens,hidden_dim]` |
+| `decoder_fp32.onnx` | `memory [1,N_tokens,hidden_dim]` | `pred_logits [1,300,80]`、`pred_boxes [1,300,4]` |
+
+后处理 `PostProcessor` 在模型图外，保持 FP32；focal 模式在 query × class 上做全局
+TopK300。
+
+### 8. 图片验证
+
+#### 检测
+
+只跑 ONNX Runtime，不构建 PyTorch 参考：
+
+```bash
+env PYTHONPATH="$PWD" \
+  python -m qat.infer_quantonnx \
+  --config configs/deimv2/deimv2_dinov3_s_coco.yml \
+  --onnx-dir runs/export/<run-dir>_quantonnx \
+  --image example.jpg \
+  --save-npz runs/export/<run-dir>_quantonnx/example.npz \
+  --output runs/export/<run-dir>_quantonnx/example.json
+```
+
+`example.npz` 保存 `memory`、`pred_logits`、`pred_boxes`；`example.json` 记录输入尺寸、
+输出 shape 和 ONNX 路径。FP32 图片推理可用 `tools/inference/torch_inf.py`，但
+torchvision 0.21 下可能需要按 [`docs/baseline.md`](docs/baseline.md) 的兼容脚本处理。
+
+## 模型部署
+
+当前交付格式是 **QuantONNX**：backbone + encoder 为 Q/DQ 图，decoder 为 FP32；
+部署端需要支持 `QuantizeLinear` / `DequantizeLinear`（或等价的 Q/DQ 融合）。
+ONNX Runtime 的链路验收由 `export_quantonnx.py` + `infer_quantonnx.py` 完成；
+AXERA Pulsar2 / 板端部署流程尚未固化，部署前需要确认：
+
+1. 后端是否支持 Q/DQ 图、per-channel 权重和 S8 matmul / softmax；
+2. `TopK`、`grid_sample`、`LayerNorm` / `RMSNorm` 是否保持 FP32 或可被后端接受；
+3. 板端输出是否与 `pred_logits` / `pred_boxes` 的浮点语义一致。
+
+结构、TopK 分布和量化敏感点见 [`docs/architecture.md`](docs/architecture.md)；
+QAT 形态和边界接口见 [`docs/qat-pipeline.md`](docs/qat-pipeline.md)；
+实验记录与验收口径见 [`docs/qat-experiment-log.md`](docs/qat-experiment-log.md)。
+
+## 许可证
+
+详见 [`LICENSE.md`](./LICENSE.md)。

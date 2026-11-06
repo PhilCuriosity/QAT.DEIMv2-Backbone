@@ -289,7 +289,11 @@ def main() -> int:
     parser.add_argument("--config", required=True)
     parser.add_argument("--weights", default=None)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--data-root", default="~/dataset/coco")
+    parser.add_argument(
+        "--data-root",
+        default=os.environ.get("COCO_ROOT", "data/coco"),
+        help="COCO data root; defaults to $COCO_ROOT or ./data/coco",
+    )
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--workers", type=int, default=8)

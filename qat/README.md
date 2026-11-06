@@ -2,6 +2,13 @@
 
 Backbone + encoder QAT（路线 B），decoder 保持 FP32 冻结。量化目标优先 W8A16。
 
+以下命令假设已激活项目 Python 环境（torch 2.6）；COCO 数据根通过 `$COCO_ROOT` 或
+`--data-root` 指定：
+
+```bash
+export COCO_ROOT=/path/to/coco
+```
+
 ## 结构
 
 ```text
@@ -41,6 +48,7 @@ python -m qat.train_backbone_encoder \
   --config configs/deimv2/deimv2_hgnetv2_n_coco.yml \
   --weights /path/to/deimv2_hgnetv2_n_coco.pth \
   --output-dir runs/qat/deimv2_n_w8a16_qat_$(date +%Y%m%d_%H%M%S) \
+  --data-root "$COCO_ROOT" \
   --device cuda:0 --epochs 1 --max-steps 500 \
   --batch-size 16 --calibration-batches 16
 ```
@@ -122,6 +130,7 @@ CUDA_VISIBLE_DEVICES=0 python -m qat.train_backbone_encoder \
   --weights weights/deimv2_dinov3_s_coco.pth \
   --quant-config qat/configs/quant/w8a8.json \
   --output-dir runs/qat/deimv2_s_w8a8_qat_$(date +%Y%m%d_%H%M%S) \
+  --data-root "$COCO_ROOT" \
   --device cuda:0 \
   --batch-size 32 \
   --workers 8 \

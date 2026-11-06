@@ -10,8 +10,8 @@
 
 ## 工作区与环境
 
-- 工作目录：`~/project/DEIMv2`（上游 DEIMv2，`main` 分支）。
-- 项目解释器：`python`
+- 工作目录：仓库根目录（上游 DEIMv2，`main` 分支）。
+- 项目解释器：已安装 torch 2.6 的 Python 环境（下文简称“项目 Python”）。
   - Python 3.10.19
   - torch 2.6.0+cu124
   - torchvision 0.21.0+cu124
@@ -19,12 +19,12 @@
   - faster-coco-eval 1.8.0
   - tensorboard 2.21.0（`engine/core/_config.py` 导入需要）
 - GPU：4 × NVIDIA A100-SXM4-80GB。
-- COCO 数据根：`~/dataset/coco`
-  - `train2017/`、`val2017/`、`annotations/instances_{train,val}2017.json` 均已存在。
-  - 项目 YAML 默认写的是 `data/coco/...`，该路径在本机不存在；运行时必须覆盖为真实路径。
+- COCO 数据根：本地 COCO 数据集目录
+  - 目录下应包含 `train2017/`、`val2017/`、`annotations/instances_{train,val}2017.json`。
+  - 项目 YAML 中的数据路径可能与本地实际路径不一致；运行时必须覆盖为实际数据根。
 - 权重：当前仓库没有 `weights/`、`ckpts/`。需要时从 HuggingFace `Intellindust/DEIMv2_*_COCO`
   下载，并按项目 YAML 建图后转换为 `{'model': state_dict}`。不要直接相信 HF `config.json`（见下方 S 型号注意事项）。
-- 参考实现：`~/project/QAT.DEIMv2`（HGNetv2-N 的 PT2E QAT / QuantONNX / AXERA Pulsar2 经验，可复用思路，但其结论不自动适用于其他型号）。
+- 参考实现：同级的 `QAT.DEIMv2` 仓库（HGNetv2-N 的 PT2E QAT / QuantONNX / AXERA Pulsar2 经验，可复用思路，但其结论不自动适用于其他型号）。
 
 ### 环境注意
 

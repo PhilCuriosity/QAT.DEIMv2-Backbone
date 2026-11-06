@@ -5,7 +5,7 @@ FP32 数字为对照，不使用 README 表格或历史报告中的数字直接�
 
 ## 1. 结论
 
-本机已复现：
+当前环境已复现：
 
 | 型号 | 权重 | FP32 mAP50-95 | 与 README 对比 |
 |---|---|---:|---|
@@ -13,12 +13,13 @@ FP32 数字为对照，不使用 README 表格或历史报告中的数字直接�
 | HGNetv2-Pico | `deimv2_hgnetv2_pico_coco.pth` | **38.4593** | 38.5，一致 |
 | DINOv3-S | `deimv2_dinov3_s_coco.pth` | **50.9** | 50.9，一致 |
 
-其余型号（Atto / Femto / M / L / X）尚未在本机复测。
+其余型号（Atto / Femto / M / L / X）尚未在当前环境复测。
 
 ## 2. 环境
 
 ```bash
-PY=python
+# 已激活项目 Python 环境时可直接使用 python；也可用 PY 覆盖解释器路径。
+PY=${PY:-python}
 ```
 
 - Python 3.10.19
@@ -27,7 +28,7 @@ PY=python
 - faster-coco-eval 1.8.0
 - onnx 1.17.0 / onnxruntime 1.21.0
 - GPU：NVIDIA A100-SXM4-80GB
-- COCO 根目录：`~/dataset/coco`
+- COCO 根目录：`$COCO_ROOT`（本地 COCO 数据根目录）
 
 torchvision 0.21 与项目自带的 v2 transform 存在 API 差异（`_transform` → `transform`）。
 复现前需要兼容层，或在 torchvision 0.20.1 环境运行。
@@ -126,26 +127,30 @@ config 与 YAML 一致，S 的 `interaction_indexes` 不一致。
 
 ## 6. 复现命令
 
-项目 YAML 默认写死 `data/coco/...`，本机不存在。建议用临时 YAML 覆盖数据路径：
+项目 YAML 中的 COCO 路径可能是占位路径。在仓库根目录执行以下命令，用临时 YAML
+覆盖数据路径：
 
 ```bash
-cat > runs/baseline/deimv2_baseline_n.yml <<'EOF'
-__include__: ['~/project/DEIMv2/configs/deimv2/deimv2_hgnetv2_n_coco.yml']
+export COCO_ROOT=/path/to/coco
+PY=${PY:-python}
+
+mkdir -p runs/baseline
+cat > runs/baseline/deimv2_baseline_n.yml <<EOF
+__include__: ['$PWD/configs/deimv2/deimv2_hgnetv2_n_coco.yml']
 
 output_dir: runs/baseline/deimv2_baseline_n
 train_dataloader:
   dataset:
-    img_folder: ~/dataset/coco/train2017/
-    ann_file: ~/dataset/coco/annotations/instances_train2017.json
+    img_folder: $COCO_ROOT/train2017/
+    ann_file: $COCO_ROOT/annotations/instances_train2017.json
 val_dataloader:
   dataset:
-    img_folder: ~/dataset/coco/val2017/
-    ann_file: ~/dataset/coco/annotations/instances_val2017.json
+    img_folder: $COCO_ROOT/val2017/
+    ann_file: $COCO_ROOT/annotations/instances_val2017.json
   num_workers: 8
 EOF
 
-cd ~/project/DEIMv2
-CUDA_VISIBLE_DEVICES=0 python train.py \
+CUDA_VISIBLE_DEVICES=0 $PY train.py \
   -c runs/baseline/deimv2_baseline_n.yml \
   --test-only \
   -r weights/deimv2_hgnetv2_n_coco.pth \
@@ -169,8 +174,8 @@ Average Precision (AP) @[ IoU=0.50:0.95 | area= all | maxDets=100 ] = 0.430
 （与直接调用 `train.py` 等价）：
 
 ```bash
-cd ~/project/DEIMv2
-CUDA_VISIBLE_DEVICES=0 python - <<'EOF'
+PY=${PY:-python}
+CUDA_VISIBLE_DEVICES=0 $PY - <<'EOF'
 import sys
 sys.path.insert(0, '.')
 from engine.data.transforms._transforms import ConvertBoxes, ConvertPILImage, PadToSize
@@ -197,8 +202,8 @@ EOF
 
 ## 7. 与量化结果的关系
 
-W16A16 的量化验证结果不在本文重复，见 `AGENTS.md` 的“历史验证结论”一节。当前仓库已回退，
-量化代码、权重、checkpoint 和 ONNX 产物已删除；重新开始 QAT 时，必须先按本文复现 FP32
+W16A16 的量化验证结果不在本文重复，见 `AGENTS.md` 的“历史验证结论”一节。历史 W16A16
+产物已按要求回退；当前 QAT 工具链见 `qat/`。重新开始 QAT 时，必须先按本文复现 FP32
 基线，再与量化结果比较。
 
 验收标准：
