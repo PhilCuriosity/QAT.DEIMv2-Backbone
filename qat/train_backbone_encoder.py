@@ -114,6 +114,80 @@ def _git_commit() -> str:
         return "unknown"
 
 
+def _save_epoch_checkpoint(
+    output_dir: Path,
+    prepared: nn.Module,
+    quant_config: Path,
+    args,
+    teacher,
+    history,
+    epoch: int,
+) -> Path:
+    """Save one checkpoint per epoch and keep ``qat_state.pt`` as the latest.
+
+    ``qat_state_epoch{epoch:02d}.pt`` is retained for every epoch.  The stable
+    ``qat_state.pt`` path is a hardlink to the latest epoch file, so existing
+    export tools can keep using it without storing a second 31 MB copy.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    epoch_path = output_dir / f"qat_state_epoch{epoch:02d}.pt"
+    torch.save(
+        {
+            "qat_model": prepared.state_dict(),
+            "quant_config": str(quant_config),
+            "use_lsq": bool(args.lsq),
+            "keep_observers": bool(args.keep_observers),
+            "distill": teacher is not None,
+            "history": history,
+            "epoch": epoch,
+        },
+        epoch_path,
+    )
+
+    latest_path = output_dir / "qat_state.pt"
+    tmp_path = output_dir / ".qat_state.tmp"
+    try:
+        if tmp_path.exists() or tmp_path.is_symlink():
+            tmp_path.unlink()
+        os.link(epoch_path, tmp_path)
+        os.replace(tmp_path, latest_path)
+    except OSError:
+        # Filesystems without hardlink support still work, at the cost of a copy.
+        shutil.copy2(epoch_path, latest_path)
+    finally:
+        if tmp_path.exists() or tmp_path.is_symlink():
+            tmp_path.unlink()
+    return epoch_path
+
+
+def _save_best_checkpoint(output_dir: Path, eval_record: dict) -> Path:
+    """Copy the best epoch checkpoint to a standalone ``qat_state_best.pt``.
+
+    This is a real byte-for-byte copy, not a hardlink or a pointer file, so the
+    best checkpoint stays intact even if the per-epoch file is moved or removed.
+    """
+    epoch = eval_record["epoch"]
+    source = output_dir / f"qat_state_epoch{epoch:02d}.pt"
+    if not source.is_file():
+        raise FileNotFoundError(f"best epoch checkpoint not found: {source}")
+
+    best_path = output_dir / "qat_state_best.pt"
+    tmp_path = output_dir / ".qat_state_best.tmp"
+    try:
+        if tmp_path.exists() or tmp_path.is_symlink():
+            tmp_path.unlink()
+        shutil.copy2(source, tmp_path)
+        os.replace(tmp_path, best_path)
+    finally:
+        if tmp_path.exists() or tmp_path.is_symlink():
+            tmp_path.unlink()
+    print(
+        f"new best: epoch {epoch} mAP50-95={eval_record['mAP50-95']:.6f} "
+        f"-> {best_path.name}"
+    )
+    return best_path
+
+
 def _save_run_metadata(args, output_dir: Path, cfg=None) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "train_args.json").write_text(json.dumps(vars(args), indent=2) + "\n")
@@ -327,6 +401,7 @@ def main() -> int:
     history = []
     eval_history = []
     last_eval_epoch = -1
+    best_map = -1.0
     global_step = 0
     for epoch in range(args.epochs):
         running = 0.0
@@ -388,18 +463,10 @@ def main() -> int:
             "sec": round(time.time() - started, 1),
         }
         history.append(record)
-        torch.save(
-            {
-                "qat_model": prepared.state_dict(),
-                "quant_config": str(quant_config),
-                "use_lsq": bool(args.lsq),
-                "keep_observers": bool(args.keep_observers),
-                "distill": teacher is not None,
-                "history": history,
-            },
-            output_dir / "qat_state.pt",
+        checkpoint_path = _save_epoch_checkpoint(
+            output_dir, prepared, quant_config, args, teacher, history, epoch
         )
-        print(record)
+        print(record, "checkpoint", checkpoint_path.name)
         (output_dir / "train_history.json").write_text(json.dumps(history, indent=2) + "\n")
 
         if args.eval_every > 0 and ((epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1):
@@ -413,6 +480,9 @@ def main() -> int:
                 "\n".join(json.dumps(item) for item in eval_history) + "\n"
             )
             print("eval", json.dumps(eval_record))
+            if eval_report["mAP50-95"] > best_map:
+                best_map = eval_report["mAP50-95"]
+                _save_best_checkpoint(output_dir, eval_record)
 
     if args.eval and last_eval_epoch != args.epochs - 1:
         eval_report = _evaluate_fake_quant(
@@ -424,6 +494,9 @@ def main() -> int:
             "\n".join(json.dumps(item) for item in eval_history) + "\n"
         )
         print("eval", json.dumps(eval_history[-1]))
+        if eval_history[-1]["mAP50-95"] > best_map:
+            best_map = eval_history[-1]["mAP50-95"]
+            _save_best_checkpoint(output_dir, eval_history[-1])
 
     if args.eval or args.eval_every > 0:
         final_report = eval_history[-1]
