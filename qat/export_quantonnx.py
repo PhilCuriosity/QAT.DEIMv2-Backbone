@@ -381,7 +381,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--weights", required=True)
-    parser.add_argument("--run-dir", required=True, help="directory with qat_state.pt")
+    parser.add_argument("--run-dir", required=True, help="QAT run directory")
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="QAT checkpoint to export; defaults to run-dir/qat_state.pt",
+    )
     parser.add_argument("--quant-config", default=None, help="defaults to run-dir/quant_config_discovered.json")
     parser.add_argument("--output-dir", default=None, help="defaults to run-dir/quantonnx")
     parser.add_argument("--device", default="cpu")
@@ -414,7 +419,8 @@ def main() -> int:
         raise RuntimeError(f"checkpoint mismatch: missing={missing[:5]} unexpected={unexpected[:5]}")
     model.to(args.device).eval()
 
-    raw_checkpoint = load_checkpoint(run_dir / "qat_state.pt")
+    checkpoint = Path(args.checkpoint) if args.checkpoint else run_dir / "qat_state.pt"
+    raw_checkpoint = load_checkpoint(checkpoint)
     use_lsq = bool(args.lsq or raw_checkpoint.get("use_lsq", False))
     prepared = prepare_model(
         model,
@@ -456,8 +462,8 @@ def main() -> int:
         "model_config": str(Path(args.config).resolve()),
         "weights": str(Path(args.weights).resolve()),
         "weights_sha256": sha256(Path(args.weights)),
-        "qat_state": str(run_dir / "qat_state.pt"),
-        "qat_state_sha256": sha256(run_dir / "qat_state.pt"),
+        "qat_state": str(checkpoint),
+        "qat_state_sha256": sha256(checkpoint),
         "quant_config": str(quant_config.resolve()),
         "quant_config_sha256": sha256(quant_config),
         "use_lsq": use_lsq,

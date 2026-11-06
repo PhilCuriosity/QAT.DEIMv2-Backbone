@@ -91,6 +91,7 @@ def _build_act_fake_quant(
     observer_name: str,
     is_qat: bool,
     is_dynamic: bool,
+    qscheme=None,
 ) -> tuple[type[ObserverOrFakeQuantize], Dict[str, Any]]:
     extra_args: Dict[str, Any] = {"eps": 2**-12}
     if is_qat:
@@ -99,6 +100,14 @@ def _build_act_fake_quant(
             return FakeQuantize, extra_args
         if observer_name in {"moving_avg", "default", "moving_average_minmax"}:
             extra_args["observer"] = MovingAverageMinMaxObserver
+            # TODO(W8A16): FusedMovingAvgObsFakeQuantize 的 U16 cached qparams 与
+            # observer.calculate_qparams() 不一致；见 docs/architecture.md §11.7。
+            # The fused kernel (torch.fused_moving_avg_obs_fake_quant) always
+            # computes affine scale/zero_point and ignores the qspec qscheme.
+            # For symmetric qspecs use the non-fused FakeQuantize so prepared
+            # and convert_pt2e produce the same qparams.
+            if qscheme == torch.per_tensor_symmetric:
+                return FakeQuantize, extra_args
             return FusedMovingAvgObsFakeQuantize, extra_args
         if observer_name == "minmax":
             extra_args["observer"] = MinMaxObserver
@@ -120,20 +129,26 @@ def _build_weight_fake_quant(
     is_qat: bool,
     ch_axis: int,
     fused: bool = True,
+    qscheme=None,
 ) -> tuple[type[ObserverOrFakeQuantize], Dict[str, Any]]:
     extra_args: Dict[str, Any] = {"eps": 2**-12}
+    # fused_moving_avg_obs_fake_quant 不按 qscheme 的 symmetric 公式计算 qparams：
+    # per-tensor symmetric 会被算成 affine；per-channel symmetric 也会带一个
+    # 约 255/254 的 scale 偏差。convert_pt2e 按 observer 的 calculate_qparams()
+    # 生成 Q/DQ，因此 symmetric 权重必须使用非 fused 的 FakeQuantize。
+    symmetric = qscheme in (torch.per_tensor_symmetric, torch.per_channel_symmetric)
     if is_qat:
         if observer_name in {"moving_avg_per_channel", "default"}:
             extra_args["observer"] = MovingAveragePerChannelMinMaxObserver.with_args(ch_axis=ch_axis)
             # fused_moving_avg_obs_fake_quant 的 per-channel 只支持 ch_axis==0；
-            # 需要非0轴（convtranspose）时由调用方传 fused=False 改用普通 FakeQuantize（对齐上游）
-            return (FusedMovingAvgObsFakeQuantize if fused else FakeQuantize), extra_args
+            # 需要非0轴（convtranspose）或 symmetric 时改用普通 FakeQuantize（对齐上游）
+            return (FusedMovingAvgObsFakeQuantize if fused and not symmetric else FakeQuantize), extra_args
         if observer_name in {"per_channel", "per_channel_minmax"}:
             extra_args["observer"] = PerChannelMinMaxObserver.with_args(ch_axis=ch_axis)
             return FakeQuantize, extra_args
         if observer_name in {"moving_avg", "moving_average_minmax"}:
             extra_args["observer"] = MovingAverageMinMaxObserver
-            return FusedMovingAvgObsFakeQuantize, extra_args
+            return (FakeQuantize if symmetric else FusedMovingAvgObsFakeQuantize), extra_args
         if observer_name == "minmax":
             extra_args["observer"] = MinMaxObserver
             return FakeQuantize, extra_args
@@ -166,10 +181,10 @@ def get_quantization_config(
         else act_qscheme
     )
     act_observer_or_fake_quant_ctr, extra_args = _build_act_fake_quant(
-        act_observer_name, is_qat=is_qat, is_dynamic=is_dynamic
+        act_observer_name, is_qat=is_qat, is_dynamic=is_dynamic, qscheme=act_qscheme
     )
     output_observer_or_fake_quant_ctr, output_extra_args = _build_act_fake_quant(
-        output_act_observer_name, is_qat=is_qat, is_dynamic=is_dynamic
+        output_act_observer_name, is_qat=is_qat, is_dynamic=is_dynamic, qscheme=output_qscheme
     )
 
     input_dtype = quant_config.input_dtype
@@ -206,7 +221,7 @@ def get_quantization_config(
     # weight
     weight_qscheme = torch.per_channel_symmetric
     weight_observer_or_fake_quant_ctr, extra_args = _build_weight_fake_quant(
-        weight_observer_name, is_qat=is_qat, ch_axis=0
+        weight_observer_name, is_qat=is_qat, ch_axis=0, qscheme=weight_qscheme
     )
     weight_dtype = quant_config.weight_dtype
     if weight_dtype is not None:
@@ -228,7 +243,7 @@ def get_quantization_config(
     # fused_moving_avg_obs_fake_quant per-channel 只支持 axis==0，故显式 fused=False 用普通 FakeQuantize（对齐上游）
     weight_qscheme = torch.per_channel_symmetric
     weight_observer_or_fake_quant_ctr, extra_args = _build_weight_fake_quant(
-        weight_observer_name, is_qat=is_qat, ch_axis=1, fused=False
+        weight_observer_name, is_qat=is_qat, ch_axis=1, fused=False, qscheme=weight_qscheme
     )
 
     weight_dtype = quant_config.weight_dtype
